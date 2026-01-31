@@ -37,20 +37,21 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (CORREGIDO PARA EVITAR REPETICIÓN) ---
+// --- COMPONENTE MÓVIL (FILTRO ANTI-ECO MEJORADO) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo para iniciar');
   const [localText, setLocalText] = useState(''); 
   
   const recognitionRef = useRef(null);
-  const processedIndexRef = useRef(0); // <-- LA SOLUCIÓN: Rastrero manual de índice
+  // Usamos un ref para guardar la longitud del texto ya procesado
+  const processedLengthRef = useRef(0); 
   
   // Enviar a Firebase
   const updateRemoteText = async (text) => {
     if (!text || !user || !text.trim()) return;
     try {
-      setLocalText(text); // Feedback visual
+      setLocalText(prev => text); // Mostrar solo lo último enviado para feedback
       
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
@@ -72,17 +73,17 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true; // Necesario para ver en el cel, pero filtraremos al enviar
+    recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
     recognitionRef.current.onstart = () => {
         setStatus('Escuchando...');
-        processedIndexRef.current = 0; // Resetear al iniciar sesión de voz
+        // No reseteamos processedLengthRef aquí para mantener la memoria si se reinicia la sesión
     };
     
     recognitionRef.current.onend = () => {
       setIsListening(false);
-      setStatus('Pausado.');
+      setStatus('Pausado. Toca para seguir.');
     };
 
     recognitionRef.current.onerror = (event) => {
@@ -92,28 +93,39 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognitionRef.current.onresult = (event) => {
-      let finalChunk = '';
-      let interimChunk = '';
+      let fullFinalTranscript = '';
+      let interimTranscript = '';
 
-      // El truco: Iteramos solo sobre los resultados NUEVOS usando nuestro propio índice
-      // A veces event.resultIndex falla en Android, por eso usamos processedIndexRef
-      const startIndex = Math.max(event.resultIndex, processedIndexRef.current);
-
-      for (let i = startIndex; i < event.results.length; ++i) {
+      // 1. Construir el texto COMPLETO que tiene el navegador en memoria
+      for (let i = 0; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          finalChunk += event.results[i][0].transcript;
-          processedIndexRef.current = i + 1; // Actualizamos nuestro rastreador
+          fullFinalTranscript += event.results[i][0].transcript;
         } else {
-          interimChunk += event.results[i][0].transcript;
+          interimTranscript += event.results[i][0].transcript;
         }
       }
 
-      // Solo mostramos el interim en el celular
-      if (interimChunk) setLocalText(interimChunk + '...');
-      
-      // Solo enviamos a la PC si hay un bloque FINAL confirmado
-      if (finalChunk) {
-          updateRemoteText(finalChunk);
+      // 2. Feedback visual inmediato (Interim)
+      if (interimTranscript) setLocalText(interimTranscript + '...');
+
+      // 3. Lógica Anti-Eco: Comparar longitud
+      // Si el navegador reinició su memoria (longitud bajó), reseteamos nuestro contador
+      if (fullFinalTranscript.length < processedLengthRef.current) {
+        processedLengthRef.current = 0;
+      }
+
+      // Si hay texto NUEVO (más largo que lo procesado antes)
+      if (fullFinalTranscript.length > processedLengthRef.current) {
+        // Cortamos solo la parte nueva
+        const newChunk = fullFinalTranscript.substring(processedLengthRef.current);
+        
+        // Actualizamos el contador
+        processedLengthRef.current = fullFinalTranscript.length;
+
+        // Enviamos solo el pedazo nuevo
+        if (newChunk.trim()) {
+           updateRemoteText(newChunk);
+        }
       }
     };
 
@@ -125,8 +137,6 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       recognitionRef.current.stop();
     } else {
       try {
-        // Reiniciamos el índice manual para evitar conflictos
-        processedIndexRef.current = 0;
         recognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
@@ -149,7 +159,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       </button>
 
       <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]">
-        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor (Lo que escucha el celular)</p>
+        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor (Último envío)</p>
         <p className="text-lg font-medium text-white leading-relaxed">
           {localText || <span className="text-slate-600 italic">...</span>}
         </p>
@@ -208,9 +218,12 @@ export default function RadiologyWorkstation() {
       // Verificación de timestamp para evitar leer mensajes viejos
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
         setReportText(prev => {
-            // Evitar duplicar si llega el mismo texto muy rápido (debounce simple)
-            if (prev.endsWith(data.latestText.trim())) return prev;
-            return prev + (prev ? ' ' : '') + data.latestText.trim();
+            // Protección Extra: Si lo último que escribimos es idéntico a lo que llega, lo ignoramos
+            const newTxt = data.latestText.trim();
+            if (prev.trim().endsWith(newTxt)) return prev;
+            
+            // Añadir espacio inteligente
+            return prev + (prev && !prev.endsWith(' ') ? ' ' : '') + newTxt;
         });
         updateDoc(docSnap.ref, { latestText: '' }); 
       }
