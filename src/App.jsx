@@ -37,23 +37,24 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (CON DIAGNÓSTICO) ---
+// --- COMPONENTE MÓVIL (CORREGIDO PARA EVITAR REPETICIÓN) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Esperando inicio...');
-  const [localText, setLocalText] = useState(''); // Para ver qué escucha el celular
+  const [status, setStatus] = useState('Listo para iniciar');
+  const [localText, setLocalText] = useState(''); 
+  
   const recognitionRef = useRef(null);
+  const processedIndexRef = useRef(0); // <-- LA SOLUCIÓN: Rastrero manual de índice
   
   // Enviar a Firebase
   const updateRemoteText = async (text) => {
-    if (!text || !user) return;
+    if (!text || !user || !text.trim()) return;
     try {
-      // Feedback visual inmediato
-      setLocalText(text); 
+      setLocalText(text); // Feedback visual
       
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
-        latestText: text,
+        latestText: text.trim(),
         timestamp: Date.now(),
         lastActiveUser: user.uid
       }, { merge: true });
@@ -63,46 +64,57 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   };
 
   useEffect(() => {
-    // Verificar soporte del navegador
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setStatus('ERROR: Tu navegador no soporta dictado. Usa Chrome (Android) o Safari (iOS).');
+      setStatus('Navegador no soportado. Usa Chrome en Android.');
       return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
+    recognitionRef.current.interimResults = true; // Necesario para ver en el cel, pero filtraremos al enviar
     recognitionRef.current.lang = 'es-ES';
 
-    recognitionRef.current.onstart = () => setStatus('Escuchando... Habla ahora');
+    recognitionRef.current.onstart = () => {
+        setStatus('Escuchando...');
+        processedIndexRef.current = 0; // Resetear al iniciar sesión de voz
+    };
+    
     recognitionRef.current.onend = () => {
       setIsListening(false);
-      setStatus('Micrófono en pausa. Toca para continuar.');
+      setStatus('Pausado.');
     };
+
     recognitionRef.current.onerror = (event) => {
       console.error(event.error);
       setIsListening(false);
-      if (event.error === 'not-allowed') setStatus('ERROR: Permiso de micrófono denegado.');
-      else if (event.error === 'network') setStatus('ERROR: Problema de red al dictar.');
-      else setStatus(`Error: ${event.error}`);
+      setStatus(`Error: ${event.error}`);
     };
 
     recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
+      let finalChunk = '';
+      let interimChunk = '';
 
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
+      // El truco: Iteramos solo sobre los resultados NUEVOS usando nuestro propio índice
+      // A veces event.resultIndex falla en Android, por eso usamos processedIndexRef
+      const startIndex = Math.max(event.resultIndex, processedIndexRef.current);
+
+      for (let i = startIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
+          finalChunk += event.results[i][0].transcript;
+          processedIndexRef.current = i + 1; // Actualizamos nuestro rastreador
         } else {
-          interimTranscript += event.results[i][0].transcript;
+          interimChunk += event.results[i][0].transcript;
         }
       }
 
-      // Mostrar lo que se escucha en tiempo real en la pantalla del celular
-      if (interimTranscript) setLocalText(interimTranscript + '...');
-      if (finalTranscript) updateRemoteText(finalTranscript);
+      // Solo mostramos el interim en el celular
+      if (interimChunk) setLocalText(interimChunk + '...');
+      
+      // Solo enviamos a la PC si hay un bloque FINAL confirmado
+      if (finalChunk) {
+          updateRemoteText(finalChunk);
+      }
     };
 
   }, [sessionId, user]);
@@ -113,10 +125,12 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       recognitionRef.current.stop();
     } else {
       try {
+        // Reiniciamos el índice manual para evitar conflictos
+        processedIndexRef.current = 0;
         recognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        setStatus('Error al iniciar. Recarga la página.');
+        setStatus('Error al iniciar. Recarga.');
       }
     }
   };
@@ -135,9 +149,9 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       </button>
 
       <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]">
-        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor de Texto (Lo que escucha el celular)</p>
+        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor (Lo que escucha el celular)</p>
         <p className="text-lg font-medium text-white leading-relaxed">
-          {localText || <span className="text-slate-600 italic">El texto aparecerá aquí...</span>}
+          {localText || <span className="text-slate-600 italic">...</span>}
         </p>
       </div>
 
@@ -160,21 +174,18 @@ export default function RadiologyWorkstation() {
   const recognitionRef = useRef(null);
 
   useEffect(() => {
-    // Detectar modo móvil
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'mic') {
       setIsMobileMode(true);
       setMobileSessionId(params.get('session'));
     }
-    // Auth anónima
     signInAnonymously(auth).catch(console.error);
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // DICTADO LOCAL (PC)
+  // DICTADO LOCAL
   useEffect(() => {
     if (isMobileMode) return;
-    
     if (window.SpeechRecognition || window.webkitSpeechRecognition) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
@@ -194,9 +205,14 @@ export default function RadiologyWorkstation() {
     if (isMobileMode || !remoteSessionCode) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
       const data = docSnap.data();
-      if (data?.latestText && data.timestamp > (Date.now() - 5000)) {
-        setReportText(prev => prev + ' ' + data.latestText);
-        updateDoc(docSnap.ref, { latestText: '' }); // Limpiar para no repetir
+      // Verificación de timestamp para evitar leer mensajes viejos
+      if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
+        setReportText(prev => {
+            // Evitar duplicar si llega el mismo texto muy rápido (debounce simple)
+            if (prev.endsWith(data.latestText.trim())) return prev;
+            return prev + (prev ? ' ' : '') + data.latestText.trim();
+        });
+        updateDoc(docSnap.ref, { latestText: '' }); 
       }
     });
     return () => unsub();
@@ -239,11 +255,12 @@ export default function RadiologyWorkstation() {
                   <Smartphone size={16}/> Usar Celular
                 </button>
                 <button onClick={() => setReportText('')} className="px-3 py-1.5 text-slate-500 hover:bg-slate-100 rounded text-sm">Limpiar</button>
+                <button onClick={() => navigator.clipboard.writeText(reportText)} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"><Save size={16}/> Copiar</button>
               </div>
             </div>
             <div className="flex-1 p-8 relative">
               <textarea 
-                className="w-full h-full p-8 rounded-xl border border-slate-200 shadow-sm text-lg outline-none resize-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                className="w-full h-full p-8 rounded-xl border border-slate-200 shadow-sm text-lg outline-none resize-none focus:ring-2 focus:ring-indigo-500/20 transition-all font-serif leading-relaxed"
                 placeholder="El texto dictado aparecerá aquí..."
                 value={reportText}
                 onChange={e => setReportText(e.target.value)}
@@ -254,7 +271,7 @@ export default function RadiologyWorkstation() {
             </div>
           </>
         )}
-        {activeTab === 'config' && <div className="p-8"><h2 className="text-2xl font-bold">Configuración</h2><p className="text-slate-500 mt-2">Gestión de centros y plantillas (Simplificado para diagnóstico)</p></div>}
+        {activeTab === 'config' && <div className="p-8"><h2 className="text-2xl font-bold">Configuración</h2><p className="text-slate-500 mt-2">Aquí podrás configurar tus plantillas y centros.</p></div>}
       </div>
 
       {showRemoteModal && (
@@ -264,7 +281,7 @@ export default function RadiologyWorkstation() {
               <img src={qrUrl} alt="QR" className="w-48 h-48"/>
             </div>
             <p className="font-bold text-lg mb-1">Escanea con tu celular</p>
-            <p className="text-sm text-slate-500 mb-4">Asegúrate de dar permiso al micrófono en el móvil.</p>
+            <p className="text-sm text-slate-500 mb-4">Asegúrate de dar permiso al micrófono.</p>
             <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-mono text-slate-500">Sesión: {remoteSessionCode}</div>
           </div>
         </Modal>
