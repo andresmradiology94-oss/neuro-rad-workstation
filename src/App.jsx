@@ -37,22 +37,20 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (FILTRO ANTI-ECO MEJORADO) ---
+// --- COMPONENTE MÓVIL (MODO RÁFAGA ANTI-ECO) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Listo para iniciar');
+  const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   
+  // Usamos useRef para mantener el estado de "queremos escuchar" independiente del ciclo de vida del componente
+  const shouldListenRef = useRef(false);
   const recognitionRef = useRef(null);
-  // Usamos un ref para guardar la longitud del texto ya procesado
-  const processedLengthRef = useRef(0); 
   
-  // Enviar a Firebase
   const updateRemoteText = async (text) => {
     if (!text || !user || !text.trim()) return;
     try {
-      setLocalText(prev => text); // Mostrar solo lo último enviado para feedback
-      
+      setLocalText(text); // Feedback visual
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
         latestText: text.trim(),
@@ -60,72 +58,76 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
         lastActiveUser: user.uid
       }, { merge: true });
     } catch (e) {
-      setStatus(`Error envío: ${e.message}`);
+      console.error(e);
+      setStatus('Reintentando envío...');
     }
   };
 
   useEffect(() => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setStatus('Navegador no soportado. Usa Chrome en Android.');
+      setStatus('Navegador no soportado.');
       return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;
+    
+    // CAMBIO CLAVE: Desactivamos continuous. Esto obliga a limpiar el buffer tras cada frase.
+    recognitionRef.current.continuous = false; 
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
     recognitionRef.current.onstart = () => {
         setStatus('Escuchando...');
-        // No reseteamos processedLengthRef aquí para mantener la memoria si se reinicia la sesión
     };
     
     recognitionRef.current.onend = () => {
-      setIsListening(false);
-      setStatus('Pausado. Toca para seguir.');
+      // Si el usuario NO ha pausado manualmente, reiniciamos el micrófono inmediatamente
+      if (shouldListenRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            // Si falla el reinicio rápido, esperamos un poco
+            setTimeout(() => {
+                if (shouldListenRef.current) recognitionRef.current.start();
+            }, 100);
+          }
+      } else {
+          setIsListening(false);
+          setStatus('Pausado.');
+      }
     };
 
     recognitionRef.current.onerror = (event) => {
+      // Ignoramos errores de "no-speech" que ocurren cuando hay silencio y simplemente reiniciamos
+      if (event.error === 'no-speech') return; 
+      
       console.error(event.error);
-      setIsListening(false);
-      setStatus(`Error: ${event.error}`);
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          shouldListenRef.current = false;
+          setIsListening(false);
+          setStatus('Error: Permiso denegado.');
+      }
     };
 
     recognitionRef.current.onresult = (event) => {
-      let fullFinalTranscript = '';
+      let finalTranscript = '';
       let interimTranscript = '';
 
-      // 1. Construir el texto COMPLETO que tiene el navegador en memoria
-      for (let i = 0; i < event.results.length; ++i) {
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          fullFinalTranscript += event.results[i][0].transcript;
+          finalTranscript += event.results[i][0].transcript;
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
 
-      // 2. Feedback visual inmediato (Interim)
       if (interimTranscript) setLocalText(interimTranscript + '...');
 
-      // 3. Lógica Anti-Eco: Comparar longitud
-      // Si el navegador reinició su memoria (longitud bajó), reseteamos nuestro contador
-      if (fullFinalTranscript.length < processedLengthRef.current) {
-        processedLengthRef.current = 0;
-      }
-
-      // Si hay texto NUEVO (más largo que lo procesado antes)
-      if (fullFinalTranscript.length > processedLengthRef.current) {
-        // Cortamos solo la parte nueva
-        const newChunk = fullFinalTranscript.substring(processedLengthRef.current);
-        
-        // Actualizamos el contador
-        processedLengthRef.current = fullFinalTranscript.length;
-
-        // Enviamos solo el pedazo nuevo
-        if (newChunk.trim()) {
-           updateRemoteText(newChunk);
-        }
+      // Al ser continuous=false, cada vez que hay un finalTranscript es nuevo y único.
+      // No necesitamos calcular diferencias ni índices.
+      if (finalTranscript.trim()) {
+         updateRemoteText(finalTranscript);
       }
     };
 
@@ -133,14 +135,21 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
 
   const toggleMic = () => {
     if (!recognitionRef.current) return;
+    
     if (isListening) {
+      // Usuario quiere detener
+      shouldListenRef.current = false;
       recognitionRef.current.stop();
+      setIsListening(false);
     } else {
+      // Usuario quiere iniciar
+      shouldListenRef.current = true;
       try {
         recognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        setStatus('Error al iniciar. Recarga.');
+        setStatus('Error al iniciar. Toca de nuevo.');
+        shouldListenRef.current = false;
       }
     }
   };
@@ -159,9 +168,9 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       </button>
 
       <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]">
-        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor (Último envío)</p>
+        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor</p>
         <p className="text-lg font-medium text-white leading-relaxed">
-          {localText || <span className="text-slate-600 italic">...</span>}
+          {localText || <span className="text-slate-600 italic">Esperando voz...</span>}
         </p>
       </div>
 
@@ -218,8 +227,8 @@ export default function RadiologyWorkstation() {
       // Verificación de timestamp para evitar leer mensajes viejos
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
         setReportText(prev => {
-            // Protección Extra: Si lo último que escribimos es idéntico a lo que llega, lo ignoramos
             const newTxt = data.latestText.trim();
+            // Evitar duplicar si llega el mismo texto muy rápido
             if (prev.trim().endsWith(newTxt)) return prev;
             
             // Añadir espacio inteligente
