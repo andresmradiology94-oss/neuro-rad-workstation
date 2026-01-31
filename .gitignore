@@ -1,1 +1,3 @@
-node_modulesdist.env.DS_Store
+node_modules
+dist
+.env
