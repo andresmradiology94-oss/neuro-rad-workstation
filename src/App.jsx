@@ -36,9 +36,9 @@ const PUNCTUATION_MAP = {
   "guión": "-"
 };
 
-// --- DICCIONARIO FONÉTICO RADIOLÓGICO (BASE DE DATOS MASIVA) ---
+// --- DICCIONARIO FONÉTICO RADIOLÓGICO ---
 const MEDICAL_CORRECTIONS = {
-  // --- GENERALES Y ERRORES COMUNES ---
+  // --- GENERALES ---
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
   "sensacional": "centroacinar", "centro asin arias": "centroacinares",
@@ -46,8 +46,6 @@ const MEDICAL_CORRECTIONS = {
   "brote": "brote", "árbol en brote": "árbol en brote",
   "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
   "impronta": "impronta", "sugestivo": "sugestivo", "compatible": "compatible",
-  "hallazgo": "hallazgo", "evidencia": "evidencia",
-  "significativo": "significativo", "predominio": "predominio",
   
   // --- TÓRAX ---
   "esmerilado": "esmerilado", "deslustrado": "deslustrado",
@@ -77,7 +75,7 @@ const MEDICAL_CORRECTIONS = {
   "próstata": "próstata", "seminales": "vesículas seminales",
   "útero": "útero", "endometrio": "endometrio", "miometrio": "miometrio",
   
-  // --- NEURO (TU ESPECIALIDAD) ---
+  // --- NEURO ---
   "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
   "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
   "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
@@ -120,7 +118,7 @@ const MEDICAL_CORRECTIONS = {
 const applyMedicalContext = (text, userJargon = [], previousText = "") => {
   let processed = text.toLowerCase();
 
-  // 1. Reemplazo de Puntuación
+  // 1. Puntuación
   Object.keys(PUNCTUATION_MAP).forEach(punct => {
     const regex = new RegExp(`\\b${punct}\\b`, 'gi');
     processed = processed.replace(regex, PUNCTUATION_MAP[punct]);
@@ -171,13 +169,14 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL ---
+// --- COMPONENTE MÓVIL (MODO CONTINUO INTELIGENTE) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const shouldListenRef = useRef(false);
   const recognitionRef = useRef(null);
+  const processedIndexRef = useRef(0); // Para evitar duplicados en modo continuo
   
   const updateRemoteText = async (text) => {
     if (!text || !user || !text.trim()) return;
@@ -201,29 +200,58 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = false; 
+    // CAMBIO: Continuous true para permitir pausas al pensar
+    recognitionRef.current.continuous = true; 
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
-    recognitionRef.current.onstart = () => setStatus('Escuchando...');
+    recognitionRef.current.onstart = () => {
+        setStatus('Escuchando...');
+        processedIndexRef.current = 0; // Reiniciamos el índice de palabras procesadas al iniciar sesión
+    };
+    
     recognitionRef.current.onend = () => {
+      // Si se detiene (por silencio muy largo o error), intentamos reiniciar si el usuario no pausó
       if (shouldListenRef.current) {
-          try { recognitionRef.current.start(); } 
-          catch (e) { setTimeout(() => { if (shouldListenRef.current) recognitionRef.current.start(); }, 100); }
+          try { 
+              recognitionRef.current.start(); 
+          } 
+          catch (e) { 
+              setTimeout(() => { if (shouldListenRef.current) recognitionRef.current.start(); }, 100); 
+          }
       } else {
           setIsListening(false);
           setStatus('Pausado.');
       }
     };
-    recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
-        else interimTranscript += event.results[i][0].transcript;
+
+    recognitionRef.current.onerror = (event) => {
+      if (event.error === 'no-speech') return; // Ignorar silencio
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          shouldListenRef.current = false;
+          setIsListening(false);
+          setStatus('Error: Permiso denegado.');
       }
+    };
+
+    recognitionRef.current.onresult = (event) => {
+      let interimTranscript = '';
+
+      // TRUCO ANTI-ECO: Solo procesamos los resultados que están DESPUÉS de lo que ya enviamos
+      // Usamos processedIndexRef para llevar la cuenta
+      for (let i = processedIndexRef.current; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          const finalChunk = event.results[i][0].transcript;
+          if (finalChunk.trim()) {
+              updateRemoteText(finalChunk);
+          }
+          processedIndexRef.current = i + 1; // Marcamos hasta aquí como "ya enviado"
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+      
       if (interimTranscript) setLocalText(interimTranscript + '...');
-      if (finalTranscript.trim()) updateRemoteText(finalTranscript);
     };
   }, [sessionId, user]);
 
@@ -239,7 +267,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
         recognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        setStatus('Error.');
+        setStatus('Error. Toca de nuevo.');
         shouldListenRef.current = false;
       }
     }
@@ -325,18 +353,48 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode, jargonDict]);
 
+  // CORRECCIÓN MICRÓFONO PC
+  useEffect(() => {
+    if (isMobileMode) return;
+    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'es-ES';
+      
+      recognitionRef.current.onresult = (e) => {
+        let finalChunk = '';
+        for (let i = e.resultIndex; i < e.results.length; ++i) {
+            if(e.results[i].isFinal) finalChunk += e.results[i][0].transcript;
+        }
+        if(finalChunk) {
+            const cleanText = applyMedicalContext(finalChunk, jargonDict, reportTextRef.current);
+            setReportText(prev => {
+                const isPunctuation = /^[.,;:]/.test(cleanText);
+                const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
+                return prev + space + cleanText;
+            });
+        }
+      };
+      recognitionRef.current.onend = () => setIsListening(false);
+    }
+  }, [isMobileMode, jargonDict]); // Añadido jargonDict a deps para actualizar contexto
+
   const toggleDictation = () => {
     if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
-    if (isListening) recognitionRef.current.stop();
-    else { recognitionRef.current.start(); setIsListening(true); }
-    setIsListening(!isListening);
+    if (isListening) {
+        recognitionRef.current.stop();
+        // setIsListening(false) se maneja en onend
+    } else { 
+        recognitionRef.current.start(); 
+        setIsListening(true); 
+    }
+    // ELIMINADA LÍNEA PROBLEMÁTICA QUE INVERTÍA EL ESTADO
   };
 
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
-  
   const addCenter = async () => { if(tempData.name) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), {name: tempData.name}); setTempData({}); setShowCenterModal(false); }};
-  
-  // Guardar plantilla (Manual o Pegada)
   const addTemplate = async () => { 
       if(tempData.title) { 
           await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {
@@ -348,7 +406,6 @@ export default function RadiologyWorkstation() {
           setShowTemplateModal(false); 
       }
   };
-  
   const addJargon = async () => { if(tempData.trigger) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), {trigger: tempData.trigger.toLowerCase(), replacement: tempData.replacement}); setTempData({}); }};
   const deleteItem = async (col, id) => { if(confirm('¿Eliminar?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
 
@@ -424,7 +481,6 @@ export default function RadiologyWorkstation() {
         )}
       </div>
       
-      {/* MODAL DE PLANTILLAS MEJORADO PARA PEGAR TEXTO */}
       {showTemplateModal && <Modal title="Nueva Plantilla" onClose={() => setShowTemplateModal(false)}>
           <input className="w-full p-3 border rounded mb-3" placeholder="Título (ej. Tórax Normal)" onChange={e => setTempData({...tempData, title: e.target.value})}/>
           <select className="w-full p-3 border rounded mb-3 bg-white" onChange={e => setTempData({...tempData, centerId: e.target.value})} defaultValue=""><option value="" disabled>Centro</option><option value="global">Global</option>{centers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
