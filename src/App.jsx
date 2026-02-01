@@ -32,7 +32,92 @@ try {
 
 const appId = 'neuro-rad-prod'; 
 
-// --- 3. PROCESAMIENTO DE TEXTO ---
+// --- 3. DICCIONARIO MAESTRO (SOLO PARA CARGA INICIAL) ---
+// Este objeto contiene todo el vocabulario extraído de tus PDFs.
+// Se usará una sola vez para subirlo a la nube.
+const INITIAL_MASTER_DICTIONARY = {
+    // ERRORES DE DICTADO
+    "imperio intensas": "hiperintensas", "imperio": "hiper",
+    "microscopía": "microangiopatía", "dólares": "nodulares", "dolares": "nodulares",
+    "modulares": "nodulares", "videos": "vidrio", "vídeos": "vidrio",
+    "sensacional": "centroacinar", "centro de similares": "centroacinares",
+    "inflexión": "infeccioso", "infección": "infeccioso",
+    "brote": "brote", "a tele taxi as": "atelectasias",
+    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica",
+    "entre 2": "en T2", "entre 1": "en T1", "como ha compatible": "hallazgo compatible",
+
+    // NEURO & CUELLO
+    "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
+    "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
+    "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
+    "línea media": "línea media", "desviación": "desviación", "colapso": "colapso",
+    "silla turca": "silla turca", "hipófisis": "hipófisis", "tallo": "tallo hipofisario",
+    "cavernoso": "seno cavernoso", "polígono": "polígono de Willis", "sifones": "sifones carotídeos",
+    "sustancia blanca": "sustancia blanca", "sustancia gris": "sustancia gris", "periventricular": "periventricular",
+    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "lenticular": "núcleo lenticular",
+    "cerebelo": "cerebelo", "tronco": "tronco del encéfalo", "coronas radiatas": "coronas radiatas",
+    "centros semiovales": "centros semiovales", "mesencéfalo": "mesencéfalo",
+    "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
+    "gliosis": "gliosis", "isquemia": "isquemia", "infarto": "infarto",
+    "microangiopatía": "microangiopatía", "leucoaraiosis": "leucoaraiosis", "desmielinizante": "desmielinizante",
+    "cavum": "cavum", "meckel": "Meckel", "trigémino": "trigémino", "gasser": "Gasser",
+    "cai": "CAI", "conducto auditivo": "conducto auditivo", "laberinto": "laberinto",
+    "macizo": "macizo cráneo-facial", "ostiomeatales": "ostiomeatales", "infundibulares": "infundibulares",
+    "septum": "septum nasal", "cornetes": "cornetes", "polipoide": "polipoide",
+    "periamigdalino": "periamigdalino", "ganglionar": "ganglionar", "adenomegalias": "adenomegalias",
+    "neumoencéfalo": "neumoencéfalo", "neumoventrículo": "neumoventrículo", "craneotomía": "craneotomía",
+
+    // SECUENCIAS
+    "t1": "T1", "t2": "T2", "t2*": "T2*", "flair": "FLAIR", "stir": "STIR",
+    "dwi": "DWI", "adc": "ADC", "gre": "GRE", "gadolinio": "gadolinio",
+    "fiesta": "FIESTA", "tof": "TOF", "fatsat": "FATSAT", "spgr": "SPGR",
+    "angiorm": "angioRM", "angiotc": "angioTC", "propeller": "PROPELLER",
+
+    // TÓRAX
+    "esmerilado": "esmerilado", "deslustrado": "deslustrado", "neumotórax": "neumotórax",
+    "derrame plural": "derrame pleural", "costodiafragmático": "costodiafragmático",
+    "mediastínico": "mediastínico", "hiliar": "hiliar", "perihiliar": "perihiliar",
+    "parénquima": "parénquima", "intersticial": "intersticial", "alveolar": "alveolar",
+    "consolidación": "consolidación", "broncograma": "broncograma aéreo",
+    "bronquiectasias": "bronquiectasias", "panalización": "panalización",
+    "empedrado": "empedrado (Crazy Paving)", "centrolobulillar": "centrolobulillar",
+    "paraseptal": "paraseptal", "enfisema": "enfisema", "bullas": "bullas",
+    "árbol en brote": "árbol en brote", "micronodulillares": "micronodulillares",
+    "granuloma": "granuloma", "tractos": "tractos fibrosos", "empiema": "empiema",
+
+    // ABDOMEN
+    "esteatosis": "esteatosis hepática", "litiasis": "litiasis", "colelitiasis": "colelitiasis",
+    "coledocolitiasis": "coledocolitiasis", "colédoco": "colédoco", "vía biliar": "vía biliar",
+    "páncreas": "páncreas", "wirsung": "Wirsung", "uncinado": "proceso uncinado",
+    "retroperitoneo": "retroperitoneo", "peritoneo": "peritoneo", "líquido libre": "líquido libre",
+    "bosniak": "Bosniak", "quiste": "quiste", "cortical": "cortical", "medular": "medular",
+    "pielocalicial": "pielocalicial", "ureter": "uréter", "vejiga": "vejiga",
+    "divertículos": "divertículos", "diverticulosis": "diverticulosis", "diverticulitis": "diverticulitis",
+    "apendicitis": "apendicitis", "cecal": "cecal", "intususcepción": "intususcepción",
+    "vólvulo": "vólvulo", "meteorismo": "meteorismo", "niveles hidroaéreos": "niveles hidroaéreos",
+    "bazo": "bazo", "esplenomegalia": "esplenomegalia", "próstata": "próstata",
+    "vesículas seminales": "vesículas seminales", "útero": "útero", "endometrio": "endometrio",
+    "anexos": "anexos", "isquiorrectales": "isquiorrectales",
+
+    // MSK
+    "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis",
+    "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta",
+    "edema óseo": "edema óseo", "médula ósea": "médula ósea", "ligamento": "ligamento",
+    "cruzado": "cruzado", "menisco": "menisco", "rotura": "rotura", "desgarro": "desgarro",
+    "manguito": "manguito rotador", "supraespinoso": "supraespinoso", "bursitis": "bursitis",
+    "sinovitis": "sinovitis", "geodas": "geodas", "subcondrales": "subcondrales",
+    "esclerosis": "esclerosis", "platillos": "platillos tibiales", "cóndilo": "cóndilo femoral",
+    "rótula": "rótula", "poplíteo": "poplíteo", "dextroconvexa": "dextroconvexa",
+    "supracondílea": "supracondílea", "glenohumeral": "glenohumeral", "acromioclavicular": "acromioclavicular",
+
+    // GENERAL
+    "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "anecoico": "anecoico",
+    "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
+    "doppler": "Doppler", "vascularización": "vascularización", "neoformativo": "neoformativo",
+    "secundarismo": "secundarismo", "nodular": "nodular", "espiculados": "espiculados"
+};
+
+// --- 4. PROCESAMIENTO DE TEXTO (Lectura de Nube) ---
 const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const processText = (rawText, globalDictionary = {}, userJargon = [], previousText = "") => {
@@ -466,85 +551,3 @@ export default function RadiologyWorkstation() {
     </div>
   );
 }
-
-// --- 7. DICCIONARIO MAESTRO INICIAL ---
-const INITIAL_MASTER_DICTIONARY = {
-    // ERRORES COMUNES
-    "imperio intensas": "hiperintensas", "imperio": "hiper", "microscopía": "microangiopatía",
-    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
-    "videos": "vidrio", "vídeos": "vidrio", "sensacional": "centroacinar",
-    "centro de similares": "centroacinares", "inflexión": "infeccioso", "infección": "infeccioso",
-    "brote": "brote", "a tele taxi as": "atelectasias", "vi frontal": "bifrontal",
-    "vi hemisférica": "bihemisférica", "entre 2": "en T2", "entre 1": "en T1",
-    "como ha compatible": "hallazgo compatible",
-
-    // NEURO & CUELLO
-    "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
-    "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
-    "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
-    "línea media": "línea media", "desviación": "desviación", "colapso": "colapso",
-    "silla turca": "silla turca", "hipófisis": "hipófisis", "tallo": "tallo hipofisario",
-    "cavernoso": "seno cavernoso", "polígono": "polígono de Willis", "sifones": "sifones carotídeos",
-    "sustancia blanca": "sustancia blanca", "sustancia gris": "sustancia gris", "periventricular": "periventricular",
-    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "lenticular": "núcleo lenticular",
-    "cerebelo": "cerebelo", "tronco": "tronco del encéfalo", "coronas radiatas": "coronas radiatas",
-    "centros semiovales": "centros semiovales", "mesencéfalo": "mesencéfalo",
-    "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
-    "gliosis": "gliosis", "isquemia": "isquemia", "infarto": "infarto",
-    "microangiopatía": "microangiopatía", "leucoaraiosis": "leucoaraiosis", "desmielinizante": "desmielinizante",
-    "cavum": "cavum", "meckel": "Meckel", "trigémino": "trigémino", "gasser": "Gasser",
-    "cai": "CAI", "conducto auditivo": "conducto auditivo", "laberinto": "laberinto",
-    "macizo": "macizo cráneo-facial", "ostiomeatales": "ostiomeatales", "infundibulares": "infundibulares",
-    "septum": "septum nasal", "cornetes": "cornetes", "polipoide": "polipoide",
-    "periamigdalino": "periamigdalino", "ganglionar": "ganglionar", "adenomegalias": "adenomegalias",
-    "neumoencéfalo": "neumoencéfalo", "neumoventrículo": "neumoventrículo", "craneotomía": "craneotomía",
-
-    // SECUENCIAS
-    "t1": "T1", "t2": "T2", "t2*": "T2*", "flair": "FLAIR", "stir": "STIR",
-    "dwi": "DWI", "adc": "ADC", "gre": "GRE", "gadolinio": "gadolinio",
-    "fiesta": "FIESTA", "tof": "TOF", "fatsat": "FATSAT", "spgr": "SPGR",
-    "angiorm": "angioRM", "angiotc": "angioTC", "propeller": "PROPELLER",
-
-    // TÓRAX
-    "esmerilado": "esmerilado", "deslustrado": "deslustrado", "neumotórax": "neumotórax",
-    "derrame plural": "derrame pleural", "costodiafragmático": "costodiafragmático",
-    "mediastínico": "mediastínico", "hiliar": "hiliar", "perihiliar": "perihiliar",
-    "parénquima": "parénquima", "intersticial": "intersticial", "alveolar": "alveolar",
-    "consolidación": "consolidación", "broncograma": "broncograma aéreo",
-    "bronquiectasias": "bronquiectasias", "panalización": "panalización",
-    "empedrado": "empedrado (Crazy Paving)", "centrolobulillar": "centrolobulillar",
-    "paraseptal": "paraseptal", "enfisema": "enfisema", "bullas": "bullas",
-    "árbol en brote": "árbol en brote", "micronodulillares": "micronodulillares",
-    "granuloma": "granuloma", "tractos": "tractos fibrosos", "empiema": "empiema",
-
-    // ABDOMEN
-    "esteatosis": "esteatosis hepática", "litiasis": "litiasis", "colelitiasis": "colelitiasis",
-    "coledocolitiasis": "coledocolitiasis", "colédoco": "colédoco", "vía biliar": "vía biliar",
-    "páncreas": "páncreas", "wirsung": "Wirsung", "uncinado": "proceso uncinado",
-    "retroperitoneo": "retroperitoneo", "peritoneo": "peritoneo", "líquido libre": "líquido libre",
-    "bosniak": "Bosniak", "quiste": "quiste", "cortical": "cortical", "medular": "medular",
-    "pielocalicial": "pielocalicial", "ureter": "uréter", "vejiga": "vejiga",
-    "divertículos": "divertículos", "diverticulosis": "diverticulosis", "diverticulitis": "diverticulitis",
-    "apendicitis": "apendicitis", "cecal": "cecal", "intususcepción": "intususcepción",
-    "vólvulo": "vólvulo", "meteorismo": "meteorismo", "niveles hidroaéreos": "niveles hidroaéreos",
-    "bazo": "bazo", "esplenomegalia": "esplenomegalia", "próstata": "próstata",
-    "vesículas seminales": "vesículas seminales", "útero": "útero", "endometrio": "endometrio",
-    "anexos": "anexos", "isquiorrectales": "isquiorrectales",
-
-    // MSK
-    "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis",
-    "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta",
-    "edema óseo": "edema óseo", "médula ósea": "médula ósea", "ligamento": "ligamento",
-    "cruzado": "cruzado", "menisco": "menisco", "rotura": "rotura", "desgarro": "desgarro",
-    "manguito": "manguito rotador", "supraespinoso": "supraespinoso", "bursitis": "bursitis",
-    "sinovitis": "sinovitis", "geodas": "geodas", "subcondrales": "subcondrales",
-    "esclerosis": "esclerosis", "platillos": "platillos tibiales", "cóndilo": "cóndilo femoral",
-    "rótula": "rótula", "poplíteo": "poplíteo", "dextroconvexa": "dextroconvexa",
-    "supracondílea": "supracondílea", "glenohumeral": "glenohumeral", "acromioclavicular": "acromioclavicular",
-
-    // GENERAL
-    "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "anecoico": "anecoico",
-    "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
-    "doppler": "Doppler", "vascularización": "vascularización", "neoformativo": "neoformativo",
-    "secundarismo": "secundarismo", "nodular": "nodular", "espiculados": "espiculados"
-};
