@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, FileInput, Clipboard } from 'lucide-react';
+import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, FileInput, Clipboard, Keyboard } from 'lucide-react';
 
 // --- TU CONFIGURACIÓN (RADIO-A06EE) ---
 const firebaseConfig = {
@@ -151,15 +151,15 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL ---
+// --- COMPONENTE MÓVIL (V3: LÓGICA DE FLUJO LIBRE) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const shouldListenRef = useRef(false);
   const recognitionRef = useRef(null);
-  const processedIndexRef = useRef(0); 
   
+  // Enviamos raw text y que la PC se encargue de no duplicar
   const updateRemoteText = async (text) => {
     if (!text || !user || !text.trim()) return;
     try {
@@ -182,15 +182,11 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true; 
+    recognitionRef.current.continuous = true;  // Permitimos flujo continuo
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
-    recognitionRef.current.onstart = () => {
-        setStatus('Escuchando...');
-        processedIndexRef.current = 0; 
-    };
-    
+    recognitionRef.current.onstart = () => setStatus('Escuchando...');
     recognitionRef.current.onend = () => {
       if (shouldListenRef.current) {
           try { recognitionRef.current.start(); } 
@@ -210,20 +206,30 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       }
     };
 
+    // Variable local para trackear lo enviado en esta sesión de voz específica
+    let lastSentLength = 0;
+
     recognitionRef.current.onresult = (event) => {
-      let interimTranscript = '';
-      for (let i = processedIndexRef.current; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          const finalChunk = event.results[i][0].transcript;
-          if (finalChunk.trim()) {
-              updateRemoteText(finalChunk);
+      let fullTranscript = '';
+      
+      // Reconstruimos todo lo que tiene el navegador en memoria
+      for (let i = 0; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+              fullTranscript += event.results[i][0].transcript;
           }
-          processedIndexRef.current = i + 1; 
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
       }
-      if (interimTranscript) setLocalText(interimTranscript + '...');
+
+      // Si el transcript es más largo de lo que ya enviamos, enviamos la diferencia
+      if (fullTranscript.length > lastSentLength) {
+          const newPart = fullTranscript.substring(lastSentLength);
+          if (newPart.trim()) {
+              updateRemoteText(newPart);
+              lastSentLength = fullTranscript.length;
+          }
+      } else if (fullTranscript.length < lastSentLength) {
+          // El navegador reseteó su memoria (sucede en Android a veces)
+          lastSentLength = 0;
+      }
     };
   }, [sessionId, user]);
 
@@ -277,7 +283,7 @@ export default function RadiologyWorkstation() {
   const [isListening, setIsListening] = useState(false);
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
-  const [pcInterimText, setPcInterimText] = useState(''); // NUEVO: Estado para ver qué escucha la PC
+  const [pcInterimText, setPcInterimText] = useState(''); 
   
   const [showCenterModal, setShowCenterModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -285,8 +291,8 @@ export default function RadiologyWorkstation() {
   
   const recognitionRef = useRef(null);
   const textareaRef = useRef(null);
-  const reportTextRef = useRef('');
-  const jargonDictRef = useRef([]); // Ref para jerga estable
+  const reportTextRef = useRef(''); // Ref para evitar cierres obsoletos (stale closures)
+  const jargonDictRef = useRef([]); 
 
   // Sincronizar Refs
   useEffect(() => { reportTextRef.current = reportText; }, [reportText]);
@@ -329,19 +335,29 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // CORRECCIÓN MICRÓFONO PC
+  // --- LÓGICA DE DICTADO PC ROBUSTA ---
   useEffect(() => {
     if (isMobileMode) return;
+    
     if (window.SpeechRecognition || window.webkitSpeechRecognition) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'es-ES';
       
-      recognitionRef.current.onresult = (e) => {
+      // Creamos la instancia UNA VEZ
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'es-ES';
+      
+      recognition.onstart = () => setIsListening(true);
+      recognition.onend = () => {
+          setIsListening(false);
+          // Auto-reinicio si se corta inesperadamente y queríamos seguir escuchando
+          // (Aquí lo mantenemos simple: se apaga y el usuario debe volver a encenderlo si quiere)
+      };
+
+      recognition.onresult = (e) => {
+        let interimChunk = '';
         let finalChunk = '';
-        let interimChunk = ''; // Para mostrar lo que está pensando
         
         for (let i = e.resultIndex; i < e.results.length; ++i) {
             if(e.results[i].isFinal) {
@@ -351,29 +367,36 @@ export default function RadiologyWorkstation() {
             }
         }
         
-        setPcInterimText(interimChunk); // Mostrar borrador en pantalla
+        setPcInterimText(interimChunk);
 
         if(finalChunk) {
-            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, reportTextRef.current);
+            // Usamos Refs para acceder al estado más reciente sin reiniciar el efecto
+            const currentText = reportTextRef.current;
+            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, currentText);
+            
             setReportText(prev => {
                 const isPunctuation = /^[.,;:]/.test(cleanText);
                 const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
                 return prev + space + cleanText;
             });
-            setPcInterimText(''); // Limpiar borrador al confirmar
+            setPcInterimText(''); 
         }
       };
-      recognitionRef.current.onend = () => setIsListening(false);
+      
+      recognitionRef.current = recognition;
     }
-  }, [isMobileMode]); // Removido jargonDict de dependencias para evitar reinicios
+  }, [isMobileMode]); 
 
   const toggleDictation = () => {
     if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
     if (isListening) {
         recognitionRef.current.stop();
     } else { 
-        recognitionRef.current.start(); 
-        setIsListening(true); 
+        try {
+            recognitionRef.current.start(); 
+        } catch (e) {
+            console.error("Error al iniciar mic:", e);
+        }
     }
   };
 
@@ -432,12 +455,21 @@ export default function RadiologyWorkstation() {
             </div>
             <div className="flex-1 p-8 bg-slate-50 overflow-y-auto">
               <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 min-h-[600px] flex flex-col relative">
-                <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Comienza a dictar..." className="flex-1 w-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"/>
-                {pcInterimText && (
-                    <div className="absolute bottom-4 left-8 right-24 bg-slate-100 p-2 rounded text-slate-500 text-sm italic truncate border border-slate-200">
-                        Escuchando: {pcInterimText}...
-                    </div>
-                )}
+                <div className="relative flex-1">
+                    <textarea 
+                        ref={textareaRef} 
+                        value={reportText} 
+                        onChange={(e) => setReportText(e.target.value)} 
+                        placeholder="Comienza a dictar..." 
+                        className="w-full h-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"
+                    />
+                    {pcInterimText && (
+                        <div className="absolute bottom-4 left-8 right-24 pointer-events-none">
+                            <span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse">{pcInterimText}</span>
+                        </div>
+                    )}
+                </div>
+                
                 <button onClick={toggleDictation} className={`absolute bottom-8 right-8 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-105 ${isListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>{isListening ? <MicOff size={28}/> : <Mic size={28}/>}</button>
               </div>
             </div>
