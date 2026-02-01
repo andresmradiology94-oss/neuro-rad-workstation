@@ -64,7 +64,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
     text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // B. DICCIONARIO MÉDICO MASIVO (Extraído de tus PDFs)
+  // B. DICCIONARIO MÉDICO MASIVO (Extraído de tus PDFs - SIN DUPLICADOS)
   const MEDICAL_CORRECTIONS = {
     // --- ERRORES FONÉTICOS COMUNES ---
     "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
