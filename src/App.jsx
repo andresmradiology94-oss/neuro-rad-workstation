@@ -34,7 +34,7 @@ const appId = 'neuro-rad-prod';
 
 // --- 3. PROCESAMIENTO DE TEXTO (LÓGICA MAESTRA) ---
 
-// Función para escapar caracteres especiales en Regex (Evita crash por T2*)
+// Función para escapar caracteres especiales en Regex
 const escapeRegExp = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
@@ -49,7 +49,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   }
   let text = cleanedRaw.toLowerCase();
 
-  // A. MAPEO DE PUNTUACIÓN
+  // A. MAPEO DE PUNTUACIÓN (Regex estricto)
   const PUNCTUATION_MAP = {
     "punto y aparte": ".\n", "punto aparte": ".\n", "nuevo párrafo": "\n\n",
     "punto y seguido": ".", "punto seguido": ".", 
@@ -64,10 +64,19 @@ const processText = (rawText, userJargon = [], previousText = "") => {
     text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // B. DICCIONARIO MÉDICO MASIVO (Extraído de tus PDFs - SIN DUPLICADOS)
+  // B. DICCIONARIO MÉDICO MASIVO (CORRECCIONES DE ALUCINACIONES)
   const MEDICAL_CORRECTIONS = {
+    // --- ERRORES CRÍTICOS DETECTADOS ---
+    "imperio intensas": "hiperintensas", "imperio": "hiper", 
+    "microscopía crónica": "microangiopatía crónica", "microscopía": "microangiopatía",
+    "centro de similares": "centroacinares", "centro similares": "centroacinares",
+    "cómo ha compatible": "hallazgo compatible", "como ha compatible": "hallazgo compatible",
+    "entre 2": "en T2", "entre dos": "en T2",
+    "vi hemisférica": "bihemisférica", "vi hemisferica": "bihemisférica",
+    "dólares": "nodulares", "dolares": "nodulares",
+    
     // --- ERRORES FONÉTICOS COMUNES ---
-    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
+    "modulares": "nodulares",
     "videos": "vidrio", "vídeos": "vidrio", 
     "sensacional": "centroacinar", "centro asin arias": "centroacinares", "sinacinales": "centroacinares",
     "inflexión": "infeccioso", "infección": "infeccioso",
