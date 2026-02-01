@@ -40,7 +40,8 @@ const PUNCTUATION_MAP = {
 const MEDICAL_CORRECTIONS = {
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
-  "sensacional": "centroacinar", "centro asin arias": "centroacinares",
+  "sensacional": "centroacinar", "centro asin arias": "centroacinares", "centroacinares": "centroacinares",
+  "sinacinales": "centroacinares", "sin a finales": "centroacinares",
   "inflexión": "infeccioso", "infección": "infeccioso",
   "brote": "brote", "árbol en brote": "árbol en brote",
   "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
@@ -157,13 +158,15 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (CORRECCIÓN DEFINITIVA DE DUPLICADOS) ---
+// --- COMPONENTE MÓVIL (LÓGICA MATEMÁTICA ANTI-ECO) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const recognitionRef = useRef(null);
-  const lastSentTextRef = useRef(""); // Guardamos el texto completo anterior
+  
+  // Guardamos la longitud del texto que YA enviamos en esta sesión de habla
+  const lastProcessedLengthRef = useRef(0);
   
   const updateRemoteText = async (textChunk) => {
     if (!textChunk || !user || !textChunk.trim()) return;
@@ -192,7 +195,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
 
     recognitionRef.current.onstart = () => {
         setStatus('Escuchando...');
-        lastSentTextRef.current = ""; // Resetear al iniciar nueva sesión de voz
+        lastProcessedLengthRef.current = 0; // Resetear contador al iniciar
     };
     
     recognitionRef.current.onend = () => {
@@ -210,7 +213,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       let currentFullTranscript = '';
       let interimTranscript = '';
       
-      // 1. Reconstruir todo lo que el navegador tiene en memoria ahora mismo
+      // 1. Reconstruir todo el texto acumulado en esta sesión
       for (let i = 0; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
               currentFullTranscript += event.results[i][0].transcript;
@@ -219,23 +222,25 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
           }
       }
 
-      setLocalText(interimTranscript || "Procesando...");
+      setLocalText(interimTranscript || "...");
 
-      // 2. Lógica Anti-Eco por Sustracción
-      // Verificamos si lo nuevo empieza con lo viejo
-      if (currentFullTranscript.startsWith(lastSentTextRef.current)) {
-          // Extraemos solo lo nuevo
-          const newChunk = currentFullTranscript.substring(lastSentTextRef.current.length);
+      // 2. Lógica Matemática de Sustracción
+      // Si el texto actual es más largo que lo que ya enviamos, cortamos la diferencia.
+      if (currentFullTranscript.length > lastProcessedLengthRef.current) {
+          const newChunk = currentFullTranscript.substring(lastProcessedLengthRef.current);
           
           if (newChunk.trim().length > 0) {
               updateRemoteText(newChunk);
-              lastSentTextRef.current = currentFullTranscript; // Actualizamos la memoria
+              lastProcessedLengthRef.current = currentFullTranscript.length;
           }
-      } else {
-          // El navegador se reseteó (pasa en Android), así que todo es nuevo
+      } else if (currentFullTranscript.length < lastProcessedLengthRef.current) {
+          // Si el texto es más corto, significa que el navegador se reseteó solo.
+          // Reseteamos nuestro contador y tratamos todo como nuevo.
           if (currentFullTranscript.trim().length > 0) {
               updateRemoteText(currentFullTranscript);
-              lastSentTextRef.current = currentFullTranscript;
+              lastProcessedLengthRef.current = currentFullTranscript.length;
+          } else {
+              lastProcessedLengthRef.current = 0;
           }
       }
     };
@@ -339,29 +344,28 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC CORREGIDO ---
-  useEffect(() => {
-    if (isMobileMode) return;
-    
-    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'es-ES';
-      
-      recognition.onstart = () => setIsListening(true);
-      recognition.onend = () => {
-          setIsListening(false);
-          // AUTO-GUARDADO AL DETENER: Si quedó algo pendiente en el buffer visual, lo forzamos al texto
-          if (pcInterimText) {
-              const cleanText = applyMedicalContext(pcInterimText, jargonDictRef.current, reportTextRef.current);
-              setReportText(prev => prev + ' ' + cleanText);
-              setPcInterimText('');
-          }
-      };
+  // --- DICTADO PC SIMPLE Y ROBUSTO ---
+  const toggleDictation = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        return alert("Tu navegador no soporta dictado. Usa Chrome o Edge.");
+    }
 
-      recognition.onresult = (e) => {
+    if (isListening) {
+        if (recognitionRef.current) recognitionRef.current.stop();
+        setIsListening(false);
+        return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'es-ES';
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    
+    recognition.onresult = (e) => {
         let interimChunk = '';
         let finalChunk = '';
         
@@ -373,7 +377,7 @@ export default function RadiologyWorkstation() {
             }
         }
         
-        setPcInterimText(interimChunk); // Actualizar feedback visual
+        setPcInterimText(interimChunk);
 
         if(finalChunk) {
             const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, reportTextRef.current);
@@ -382,26 +386,12 @@ export default function RadiologyWorkstation() {
                 const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
                 return prev + space + cleanText;
             });
-            setPcInterimText(''); // Limpiar buffer
+            setPcInterimText(''); 
         }
-      };
-      
-      recognitionRef.current = recognition;
-    }
-  }, [isMobileMode]); // Dependencia vacía para inicializar una sola vez
+    };
 
-  const toggleDictation = () => {
-    if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
-    if (isListening) {
-        recognitionRef.current.stop();
-        // El guardado final ocurre en 'onend'
-    } else { 
-        try {
-            recognitionRef.current.start(); 
-        } catch (e) {
-            console.error("Error al iniciar mic:", e);
-        }
-    }
+    recognitionRef.current = recognition;
+    recognition.start();
   };
 
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
