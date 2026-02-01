@@ -31,7 +31,7 @@ const PUNCTUATION_MAP = {
 const MEDICAL_CORRECTIONS = {
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
-  "sensacional": "centroacinar", "centro asin arias": "centroacinares",
+  "sensacional": "centroacinar", "centro asin arias": "centroacinares", "centroacinares": "centroacinares", "sinacinales": "centroacinares",
   "inflexión": "infeccioso", "infección": "infeccioso",
   "brote": "brote", "árbol en brote": "árbol en brote",
   "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
@@ -103,10 +103,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const recognitionRef = useRef(null);
-  
-  // Usamos una referencia para saber si el usuario quiere que esté prendido
-  // Esto evita que el "auto-reinicio" se confunda
-  const shouldBeListeningRef = useRef(false);
+  const shouldBeListeningRef = useRef(false); // Control de intención
 
   const updateRemoteText = async (textChunk) => {
     if (!textChunk || !user || !textChunk.trim()) return;
@@ -136,8 +133,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     
-    // CRÍTICO: continuous = false obliga al celular a parar después de cada frase.
-    // Al parar, borra la memoria. Luego lo volvemos a prender en 'onend'.
+    // MODO RÁFAGA: Corta después de cada frase para limpiar memoria y evitar eco
     recognition.continuous = false; 
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
@@ -148,7 +144,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognition.onend = () => {
-      // Si el usuario NO le dio a pausa, lo prendemos de nuevo inmediatamente
+      // Auto-reinicio inmediato si la intención sigue siendo escuchar
       if (shouldBeListeningRef.current) {
           recognition.start();
       } else {
@@ -158,7 +154,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognition.onerror = (event) => {
-      if (event.error === 'no-speech') return; // Ignorar silencios
+      if (event.error === 'no-speech') return; 
       if (event.error === 'not-allowed') {
          shouldBeListeningRef.current = false;
          setStatus('Permiso denegado.');
@@ -170,7 +166,6 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       let interim = '';
       let final = '';
       
-      // En modo no-continuo, resultIndex siempre es 0
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) final += event.results[i][0].transcript;
         else interim += event.results[i][0].transcript;
@@ -178,7 +173,6 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       
       setLocalText(interim || "...");
       
-      // Enviamos el final y como continuous=false, el micro se apagará y reiniciará solo
       if (final.trim()) {
         updateRemoteText(final);
       }
@@ -190,12 +184,10 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
 
   const toggleMic = () => {
     if (shouldBeListeningRef.current) {
-      // Apagar
       shouldBeListeningRef.current = false;
       if (recognitionRef.current) recognitionRef.current.stop();
       setIsListening(false);
     } else {
-      // Encender
       shouldBeListeningRef.current = true;
       startListening();
     }
@@ -234,6 +226,7 @@ export default function RadiologyWorkstation() {
   // ESTADO PC
   const [isPcListening, setIsPcListening] = useState(false);
   const pcRecognitionRef = useRef(null);
+  const pcShouldListenRef = useRef(false); // Intención de escuchar PC
   
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
@@ -244,10 +237,9 @@ export default function RadiologyWorkstation() {
   const [tempData, setTempData] = useState({});
   
   const textareaRef = useRef(null);
-  const reportTextRef = useRef(''); // Ref para evitar cierres obsoletos
+  const reportTextRef = useRef(''); 
   const jargonDictRef = useRef([]); 
 
-  // Sincronizar Refs
   useEffect(() => { reportTextRef.current = reportText; }, [reportText]);
   useEffect(() => { jargonDictRef.current = jargonDict; }, [jargonDict]);
 
@@ -270,54 +262,68 @@ export default function RadiologyWorkstation() {
     return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
   }, [user, isMobileMode]);
 
-  // Listener del Móvil
+  // Listener del Móvil (PC)
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
       const data = docSnap.data();
-      // Si hay texto nuevo y es reciente (menos de 5 segundos)
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
-        const cleanText = applyMedicalContext(data.latestText, jargonDictRef.current, reportTextRef.current);
-        setReportText(prev => {
-            const isPunctuation = /^[.,;:]/.test(cleanText);
-            const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
-            return prev + space + cleanText;
-        });
-        // Limpiamos inmediatamente para que no se vuelva a leer
+        
+        // FILTRO DE DUPLICADOS EN PC: Si el texto nuevo ya está al final del informe, lo ignoramos.
+        // Esto es una capa de seguridad extra por si el móvil falla al filtrar.
+        const currentReport = reportTextRef.current.trim();
+        const incomingText = data.latestText.trim();
+        const incomingClean = applyMedicalContext(incomingText, jargonDictRef.current, "");
+
+        // Verificamos si el final del informe ya contiene este texto
+        if (!currentReport.endsWith(incomingClean) && !currentReport.endsWith(incomingText)) {
+             const cleanText = applyMedicalContext(incomingText, jargonDictRef.current, reportTextRef.current);
+             setReportText(prev => {
+                const isPunctuation = /^[.,;:]/.test(cleanText);
+                const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
+                return prev + space + cleanText;
+            });
+        }
+        // Limpiamos la base de datos para evitar re-lecturas
         updateDoc(docSnap.ref, { latestText: '' }); 
       }
     });
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC (CORREGIDO Y SIMPLIFICADO) ---
-  const togglePcDictation = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        return alert("Usa Chrome o Edge.");
-    }
-
-    // Si ya está escuchando, lo apagamos
-    if (isPcListening) {
-        if (pcRecognitionRef.current) pcRecognitionRef.current.stop();
-        setIsPcListening(false);
-        return;
+  // --- DICTADO PC (ROBUSTO CON AUTO-REINICIO) ---
+  const startPcDictation = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return alert("Usa Chrome.");
+    
+    // Matar instancia previa
+    if (pcRecognitionRef.current) {
+        try { pcRecognitionRef.current.abort(); } catch(e) {}
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.continuous = true; // En PC sí podemos usar continuous, suele ser estable
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
     recognition.onstart = () => setIsPcListening(true);
     
     recognition.onend = () => {
-        setIsPcListening(false);
+        // AUTO-REINICIO: Si el usuario quería seguir escuchando, reiniciamos
+        if (pcShouldListenRef.current) {
+            try { recognition.start(); } catch(e) { /* ignorar error si ya inició */ }
+        } else {
+            setIsPcListening(false);
+        }
     };
     
     recognition.onerror = (e) => {
-        console.error("PC Mic Error", e); 
-        setIsPcListening(false);
+        if (e.error === 'not-allowed') {
+            pcShouldListenRef.current = false;
+            setIsPcListening(false);
+            alert("Permiso denegado.");
+        }
+        // Ignoramos 'no-speech' y dejamos que 'onend' reinicie
     };
 
     recognition.onresult = (e) => {
@@ -343,6 +349,19 @@ export default function RadiologyWorkstation() {
 
     pcRecognitionRef.current = recognition;
     recognition.start();
+  };
+
+  const togglePcDictation = () => {
+    if (pcShouldListenRef.current) {
+        // Apagar
+        pcShouldListenRef.current = false;
+        if (pcRecognitionRef.current) pcRecognitionRef.current.stop();
+        setIsPcListening(false);
+    } else {
+        // Prender
+        pcShouldListenRef.current = true;
+        startPcDictation();
+    }
   };
 
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
