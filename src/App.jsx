@@ -40,8 +40,7 @@ const PUNCTUATION_MAP = {
 const MEDICAL_CORRECTIONS = {
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
-  "sensacional": "centroacinar", "centro asin arias": "centroacinares", "centroacinares": "centroacinares",
-  "sinacinales": "centroacinares", "sin a finales": "centroacinares",
+  "sensacional": "centroacinar", "centro asin arias": "centroacinares",
   "inflexión": "infeccioso", "infección": "infeccioso",
   "brote": "brote", "árbol en brote": "árbol en brote",
   "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
@@ -158,7 +157,7 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (LÓGICA MATEMÁTICA ANTI-ECO) ---
+// --- COMPONENTE MÓVIL (LÓGICA MATEMÁTICA ANTI-ECO REFORZADA) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
@@ -200,10 +199,12 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     
     recognitionRef.current.onend = () => {
         setIsListening(false);
-        setStatus('Pausado.');
+        setStatus('Pausado. Toca para seguir.');
+        lastProcessedLengthRef.current = 0; // REFORZADO: Resetear al terminar por seguridad
     };
 
     recognitionRef.current.onerror = (event) => {
+      // Ignorar error no-speech (silencio) para que no se vea feo
       if (event.error === 'no-speech') return; 
       setStatus('Error: ' + event.error);
       setIsListening(false);
@@ -213,7 +214,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       let currentFullTranscript = '';
       let interimTranscript = '';
       
-      // 1. Reconstruir todo el texto acumulado en esta sesión
+      // 1. Reconstruir todo el texto acumulado en esta sesión del navegador
       for (let i = 0; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
               currentFullTranscript += event.results[i][0].transcript;
@@ -224,7 +225,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
 
       setLocalText(interimTranscript || "...");
 
-      // 2. Lógica Matemática de Sustracción
+      // 2. Lógica Matemática de Sustracción (ANTI-ECO)
       // Si el texto actual es más largo que lo que ya enviamos, cortamos la diferencia.
       if (currentFullTranscript.length > lastProcessedLengthRef.current) {
           const newChunk = currentFullTranscript.substring(lastProcessedLengthRef.current);
@@ -234,8 +235,8 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
               lastProcessedLengthRef.current = currentFullTranscript.length;
           }
       } else if (currentFullTranscript.length < lastProcessedLengthRef.current) {
-          // Si el texto es más corto, significa que el navegador se reseteó solo.
-          // Reseteamos nuestro contador y tratamos todo como nuevo.
+          // EL CASO CRÍTICO: Si el texto es más corto, el navegador se reseteó (bug de Android).
+          // Reseteamos nuestro contador y enviamos todo como nuevo.
           if (currentFullTranscript.trim().length > 0) {
               updateRemoteText(currentFullTranscript);
               lastProcessedLengthRef.current = currentFullTranscript.length;
@@ -289,7 +290,11 @@ export default function RadiologyWorkstation() {
   
   const [currentCenterId, setCurrentCenterId] = useState('');
   const [reportText, setReportText] = useState('');
+  
+  // ESTADOS DEL MICRÓFONO PC
   const [isListening, setIsListening] = useState(false);
+  const shouldListenRef = useRef(false); // Rastrea la intención del usuario
+  
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
   const [pcInterimText, setPcInterimText] = useState(''); 
@@ -344,28 +349,48 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC SIMPLE Y ROBUSTO ---
-  const toggleDictation = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        return alert("Tu navegador no soporta dictado. Usa Chrome o Edge.");
-    }
-
-    if (isListening) {
-        if (recognitionRef.current) recognitionRef.current.stop();
-        setIsListening(false);
-        return;
-    }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'es-ES';
-
-    recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
+  // --- CONFIGURACIÓN DICTADO PC (ESTABLE Y ROBUSTA) ---
+  useEffect(() => {
+    if (isMobileMode) return;
     
-    recognition.onresult = (e) => {
+    // Inicialización UNA VEZ
+    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'es-ES';
+      
+      recognition.onstart = () => {
+          setIsListening(true);
+      };
+      
+      recognition.onend = () => {
+          // Si el usuario NO lo apagó (intención = true), intentamos reiniciar
+          // Esto soluciona los cortes inesperados
+          if (shouldListenRef.current) {
+              try {
+                  recognition.start();
+              } catch (e) {
+                  // Si falla el reinicio inmediato, esperamos un poco
+                  setTimeout(() => { if (shouldListenRef.current) recognition.start(); }, 200);
+              }
+          } else {
+              setIsListening(false);
+          }
+      };
+
+      recognition.onerror = (event) => {
+          console.log("Mic error:", event.error);
+          if (event.error === 'not-allowed') {
+              shouldListenRef.current = false;
+              setIsListening(false);
+              alert("Permiso de micrófono denegado.");
+          }
+          // Ignoramos 'no-speech' para que el reinicio automático en onend funcione
+      };
+
+      recognition.onresult = (e) => {
         let interimChunk = '';
         let finalChunk = '';
         
@@ -388,10 +413,33 @@ export default function RadiologyWorkstation() {
             });
             setPcInterimText(''); 
         }
-    };
+      };
+      
+      recognitionRef.current = recognition;
+    }
+  }, [isMobileMode]); 
 
-    recognitionRef.current = recognition;
-    recognition.start();
+  // Toggle PC simplificado que solo cambia la intención
+  const toggleDictation = () => {
+    if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
+    
+    if (shouldListenRef.current) {
+        // Usuario quiere apagar
+        shouldListenRef.current = false;
+        recognitionRef.current.stop();
+        setIsListening(false);
+    } else { 
+        // Usuario quiere prender
+        shouldListenRef.current = true;
+        try {
+            recognitionRef.current.start(); 
+            setIsListening(true);
+        } catch (e) {
+            console.error("Error start:", e);
+            // Si ya estaba corriendo por error, esto lo arregla
+            shouldListenRef.current = false; 
+        }
+    }
   };
 
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
