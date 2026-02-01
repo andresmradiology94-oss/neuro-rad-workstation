@@ -20,22 +20,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'neuro-rad-prod'; 
 
-// --- DICCIONARIOS ---
-const PUNCTUATION_MAP = {
-  "punto y aparte": ".\n", // Corregido: Agrega punto antes del salto
-  "punto aparte": ".\n",   // Corregido
-  "nuevo párrafo": "\n\n",
-  "punto y seguido": ".",
-  "punto": ".",
-  "coma": ",",
-  "dos puntos": ":",
-  "punto y coma": ";",
-  "abrir paréntesis": "(",
-  "cerrar paréntesis": ")",
-  "barra": "/",
-  "guión": "-"
-};
-
+// --- BASE DE DATOS DE CORRECCIONES MÉDICAS ---
 const MEDICAL_CORRECTIONS = {
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
@@ -60,58 +45,52 @@ const MEDICAL_CORRECTIONS = {
   "difusión": "DWI", "adc": "ADC", "gadolinio": "gadolinio"
 };
 
-const applyMedicalContext = (text, userJargon = [], previousText = "") => {
-  if (!text) return "";
-  
-  // 1. Limpieza inicial: quitar puntos automáticos del final si no son explícitos
-  let cleanedRaw = text;
-  if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
-      cleanedRaw = cleanedRaw.replace(/\.$/, '');
-  }
+// --- PROCESAMIENTO DE TEXTO INTELIGENTE ---
+const processText = (rawText, userJargon = []) => {
+  if (!rawText) return "";
+  let text = rawText.toLowerCase(); // Normalizar para búsqueda
 
-  let processed = cleanedRaw.toLowerCase();
+  // 1. REEMPLAZO DE COMANDOS DE PUNTUACIÓN (Regex avanzada para tolerar errores)
+  // Detecta "punto aparte", "punto y aparte", "punto. Aparte", etc.
+  const punctuationRules = [
+    { regex: /punto\s*[.,]?\s*y\s*aparte/gi, replacement: ".\n" },
+    { regex: /punto\s*[.,]?\s*aparte/gi, replacement: ".\n" },
+    { regex: /nuevo\s*p[áa]rrafo/gi, replacement: "\n\n" },
+    { regex: /punto\s*[.,]?\s*y\s*seguido/gi, replacement: "." },
+    { regex: /\bcoma\b/gi, replacement: "," },
+    { regex: /dos\s*puntos/gi, replacement: ":" },
+    { regex: /punto\s*y\s*coma/gi, replacement: ";" },
+    { regex: /abrir\s*par[ée]ntesis/gi, replacement: "(" },
+    { regex: /cerrar\s*par[ée]ntesis/gi, replacement: ")" },
+    { regex: /\bbarra\b/gi, replacement: "/" },
+    { regex: /\bgui[óo]n\b/gi, replacement: "-" },
+    // "punto" aislado (al final para no romper "punto aparte")
+    { regex: /\bpunto\b/gi, replacement: "." }
+  ];
 
-  // 2. Aplicar Puntuación (Mapeo)
-  Object.keys(PUNCTUATION_MAP).forEach(punct => {
-    // Usamos regex con límites de palabra para no romper palabras que contengan "coma" (ej: comadreja)
-    const regex = new RegExp(`\\b${punct}\\b`, 'gi');
-    processed = processed.replace(regex, PUNCTUATION_MAP[punct]);
+  punctuationRules.forEach(rule => {
+    text = text.replace(rule.regex, rule.replacement);
   });
 
-  // 3. Aplicar Correcciones Médicas
+  // 2. CORRECCIONES MÉDICAS
   Object.keys(MEDICAL_CORRECTIONS).forEach(errorTerm => {
     const regex = new RegExp(`\\b${errorTerm}\\b`, 'gi');
-    processed = processed.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
+    text = text.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
   });
 
-  // 4. Jerga del Usuario
+  // 3. JERGA DEL USUARIO
   userJargon.forEach(item => {
      const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
-     processed = processed.replace(regex, item.replacement);
+     text = text.replace(regex, item.replacement);
   });
 
-  // 5. LIMPIEZA DE ESPACIOS EN PUNTUACIÓN (NUEVO)
-  // Elimina espacio antes de [.,;:]
-  processed = processed.replace(/\s+([.,;:])/g, '$1');
-  // Asegura espacio después de [.,;:] si le sigue texto (no si es salto de línea)
-  processed = processed.replace(/([.,;:](?!\n))(?=\S)/g, '$1 ');
-
-  // 6. Mayúsculas Inteligentes
-  const trimmedPrev = previousText ? previousText.trim() : "";
-  // Solo capitalizamos si lo anterior termina en un signo de puntuación fuerte
-  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?'].some(char => trimmedPrev.endsWith(char));
-
-  if (endsWithPunctuation) {
-    // Capitalizar primera letra
-    return processed.charAt(0).toUpperCase() + processed.slice(1);
-  } else {
-    // Si no es inicio de frase, forzamos minúscula (excepto siglas como T1, FLAIR)
-    // Detectamos si es una sigla médica (ej. empieza con mayúscula en el diccionario)
-    const isAcronym = processed.length > 1 && processed.charAt(0) === processed.charAt(0).toUpperCase() && processed.charAt(1) === processed.charAt(1).toUpperCase();
-    if (isAcronym) return processed;
-    
-    return processed; 
-  }
+  // 4. LIMPIEZA GRAMATICAL LOCAL
+  // Quitar espacios antes de puntuación: "hola ." -> "hola."
+  text = text.replace(/\s+([.,;:])/g, '$1');
+  // Eliminar dobles puntos locales: ".." -> "."
+  text = text.replace(/\.\./g, '.');
+  
+  return text; // Devolvemos el texto procesado (aún puede estar todo en minúsculas)
 };
 
 // --- COMPONENTES UI ---
@@ -131,20 +110,20 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL ---
-const MobileMicInterface = ({ sessionId, user, isOnline }) => {
+// --- COMPONENTE MÓVIL (MODO RÁFAGA/VACIADO) ---
+const MobileMicInterface = ({ sessionId, user }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const recognitionRef = useRef(null);
-  const shouldBeListeningRef = useRef(false);
+  const shouldListenRef = useRef(false); // Bandera de intención del usuario
 
-  const updateRemoteText = async (textChunk) => {
-    if (!textChunk || !user || !textChunk.trim()) return;
+  const sendText = async (text) => {
+    if (!text || !user || !text.trim()) return;
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
-        latestText: textChunk.trim(),
+        latestText: text.trim(),
         timestamp: Date.now(),
         lastActiveUser: user.uid
       }, { merge: true });
@@ -153,18 +132,21 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     }
   };
 
-  const startListening = () => {
+  const startRecognition = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setStatus('Navegador no soportado.');
+      setStatus('Navegador no soportado (Usa Chrome).');
       return;
     }
     
+    // Limpieza de instancia previa
     if (recognitionRef.current) {
         try { recognitionRef.current.abort(); } catch(e) {}
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
+    
+    // SECUENCIAL ESTRICTO: Para evitar eco en Android, forzamos reinicio tras cada frase
     recognition.continuous = false; 
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
@@ -175,8 +157,12 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognition.onend = () => {
-      if (shouldBeListeningRef.current) {
-          try { recognition.start(); } catch(e) {}
+      // Loop infinito controlado: Si el usuario quiere seguir, reiniciamos
+      if (shouldListenRef.current) {
+          try { recognition.start(); } catch(e) { 
+              // Backoff si falla el reinicio inmediato
+              setTimeout(() => { if (shouldListenRef.current) startRecognition(); }, 200); 
+          }
       } else {
           setIsListening(false);
           setStatus('Pausado.');
@@ -184,9 +170,9 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognition.onerror = (event) => {
-      if (event.error === 'no-speech') return; 
+      if (event.error === 'no-speech') return; // Ignorar silencio
       if (event.error === 'not-allowed') {
-         shouldBeListeningRef.current = false;
+         shouldListenRef.current = false;
          setStatus('Permiso denegado.');
          setIsListening(false);
       }
@@ -204,22 +190,24 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
       setLocalText(interim || "...");
       
       if (final.trim()) {
-        updateRemoteText(final);
+        sendText(final);
       }
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
+    try { recognition.start(); } catch(e) { console.error(e); }
   };
 
   const toggleMic = () => {
-    if (shouldBeListeningRef.current) {
-      shouldBeListeningRef.current = false;
+    if (shouldListenRef.current) {
+      // APAGAR
+      shouldListenRef.current = false;
       if (recognitionRef.current) recognitionRef.current.stop();
       setIsListening(false);
     } else {
-      shouldBeListeningRef.current = true;
-      startListening();
+      // ENCENDER
+      shouldListenRef.current = true;
+      startRecognition();
     }
   };
 
@@ -255,7 +243,6 @@ export default function RadiologyWorkstation() {
   
   // ESTADO PC
   const [isPcListening, setIsPcListening] = useState(false);
-  const [pcError, setPcError] = useState(''); 
   const pcRecognitionRef = useRef(null);
   const pcShouldListenRef = useRef(false);
   
@@ -268,6 +255,7 @@ export default function RadiologyWorkstation() {
   const [tempData, setTempData] = useState({});
   
   const textareaRef = useRef(null);
+  // Refs para acceso síncrono dentro de callbacks de eventos
   const reportTextRef = useRef(''); 
   const jargonDictRef = useRef([]); 
 
@@ -293,6 +281,64 @@ export default function RadiologyWorkstation() {
     return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
   }, [user, isMobileMode]);
 
+  // --- FUNCIÓN DE MERGE INTELIGENTE (LA CLAVE) ---
+  const mergeText = (currentReport, newFragmentRaw) => {
+      // 1. Procesar fragmento nuevo (correcciones, puntuación)
+      const processedFragment = processText(newFragmentRaw, jargonDictRef.current);
+      
+      if (!processedFragment) return currentReport;
+
+      // 2. Análisis del texto existente (El final)
+      const trimmedReport = currentReport.trimEnd();
+      
+      // 3. Chequeo de Capitalización
+      // ¿Termina lo anterior en punto, salto o está vacío?
+      const endsInStopper = trimmedReport.length === 0 || ['.', '\n', '!', '?'].some(c => trimmedPrevChar(trimmedReport) === c);
+      
+      let finalFragment = processedFragment;
+      
+      // Si toca mayúscula, la aplicamos. Si no, mantenemos minúscula (salvo siglas)
+      if (endsInStopper) {
+          finalFragment = finalFragment.charAt(0).toUpperCase() + finalFragment.slice(1);
+      } else {
+          // Si no es sigla (ej T1), forzamos minúscula para continuidad de frase
+          const isAcronym = finalFragment.length > 1 && finalFragment === finalFragment.toUpperCase();
+          if (!isAcronym) {
+              // Corrección extra: Si es nombre propio o corrección médica capitalizada (ej: Wirsung), no bajarla
+              // Simplificado: solo bajar primera letra
+              finalFragment = finalFragment.charAt(0).toLowerCase() + finalFragment.slice(1);
+          }
+      }
+
+      // 4. Fusión de Puntuación (Evitar "..")
+      // Si lo nuevo empieza con punto y lo viejo termina con punto, borramos uno
+      if (trimmedReport.endsWith('.') && finalFragment.startsWith('.')) {
+          finalFragment = finalFragment.substring(1);
+      }
+      // Caso especial: "punto y aparte" (`.\n`)
+      // Si viejo termina en `.`, y nuevo es `.\n`, resultado debe ser `.\n` (no `..\n`)
+      if (trimmedReport.endsWith('.') && finalFragment.startsWith('.\n')) {
+          finalFragment = finalFragment.substring(1); // Deja solo el \n
+      }
+
+      // 5. Espaciado Automático
+      // Agregar espacio si:
+      // - No está vacío
+      // - No termina en salto de línea
+      // - No termina en espacio
+      // - Lo nuevo NO es un signo de puntuación (.,;:)
+      const isPunctuation = /^[.,;:]/.test(finalFragment);
+      const needsSpace = trimmedReport.length > 0 && !trimmedReport.endsWith('\n') && !isPunctuation;
+
+      return trimmedReport + (needsSpace ? ' ' : '') + finalFragment;
+  };
+
+  // Helper para ver último caracter real
+  const trimmedPrevChar = (str) => {
+      if (!str) return '';
+      return str.charAt(str.length - 1);
+  };
+
   // Listener del Móvil (PC)
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode) return;
@@ -300,26 +346,24 @@ export default function RadiologyWorkstation() {
       const data = docSnap.data();
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
         
-        const incomingText = data.latestText.trim();
-        // Filtro de duplicados básico para PC
-        if (!reportTextRef.current.trim().endsWith(incomingText)) {
-             const cleanText = applyMedicalContext(incomingText, jargonDictRef.current, reportTextRef.current);
-             setReportText(prev => {
-                // Lógica de espaciado para pegar puntuación
-                const isPunctuation = /^[.,;:]/.test(cleanText);
-                // Si es puntuación, no ponemos espacio antes.
-                // Si no es puntuación y lo anterior no termina en espacio ni salto, ponemos espacio.
-                const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
-                return prev + space + cleanText;
-            });
+        const rawInput = data.latestText;
+        
+        // Filtro de duplicados básico (por si el móvil falla en su filtro)
+        // Solo si el texto NO está ya al final del reporte
+        const currentRep = reportTextRef.current;
+        const simpleCheck = processText(rawInput, jargonDictRef.current).trim();
+        
+        if (!currentRep.trim().endsWith(simpleCheck)) {
+             setReportText(prev => mergeText(prev, rawInput));
         }
+        
         updateDoc(docSnap.ref, { latestText: '' }); 
       }
     });
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC ---
+  // --- DICTADO PC (CONFIGURACIÓN ESTABLE) ---
   const startPcDictation = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return alert("Usa Chrome.");
     
@@ -340,18 +384,13 @@ export default function RadiologyWorkstation() {
     
     recognition.onend = () => {
         if (pcShouldListenRef.current) {
-            try { 
-                recognition.start(); 
-            } catch(e) { 
-                setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200);
-            }
+            try { recognition.start(); } catch(e) { setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200); }
         } else {
             setIsPcListening(false);
         }
     };
     
     recognition.onerror = (e) => {
-        console.error("PC Mic Error:", e.error);
         if (e.error === 'not-allowed') {
             pcShouldListenRef.current = false;
             setIsPcListening(false);
@@ -370,12 +409,7 @@ export default function RadiologyWorkstation() {
         setPcInterimText(interimChunk);
 
         if(finalChunk) {
-            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, reportTextRef.current);
-            setReportText(prev => {
-                const isPunctuation = /^[.,;:]/.test(cleanText);
-                const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
-                return prev + space + cleanText;
-            });
+            setReportText(prev => mergeText(prev, finalChunk));
             setPcInterimText(''); 
         }
     };
