@@ -34,7 +34,7 @@ const appId = 'neuro-rad-prod';
 
 // --- 3. PROCESAMIENTO DE TEXTO (LÓGICA MAESTRA) ---
 
-// Función para escapar caracteres especiales en Regex
+// Función para escapar caracteres especiales en Regex (Evita crash por T2*)
 const escapeRegExp = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
@@ -44,6 +44,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   
   // Limpieza inicial
   let cleanedRaw = rawText;
+  // Quitar punto final automático si no es explícito
   if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
       cleanedRaw = cleanedRaw.replace(/\.$/, '');
   }
@@ -60,23 +61,15 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   };
   
   Object.keys(PUNCTUATION_MAP).forEach(punct => {
+    // \b asegura que sea la palabra exacta
     const regex = new RegExp(`\\b${escapeRegExp(punct)}\\b`, 'gi');
     text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // B. DICCIONARIO MÉDICO MASIVO (CORRECCIONES DE ALUCINACIONES)
+  // B. DICCIONARIO MÉDICO MASIVO (Extraído de tus PDFs)
   const MEDICAL_CORRECTIONS = {
-    // --- ERRORES CRÍTICOS DETECTADOS ---
-    "imperio intensas": "hiperintensas", "imperio": "hiper", 
-    "microscopía crónica": "microangiopatía crónica", "microscopía": "microangiopatía",
-    "centro de similares": "centroacinares", "centro similares": "centroacinares",
-    "cómo ha compatible": "hallazgo compatible", "como ha compatible": "hallazgo compatible",
-    "entre 2": "en T2", "entre dos": "en T2",
-    "vi hemisférica": "bihemisférica", "vi hemisferica": "bihemisférica",
-    "dólares": "nodulares", "dolares": "nodulares",
-    
     // --- ERRORES FONÉTICOS COMUNES ---
-    "modulares": "nodulares",
+    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
     "videos": "vidrio", "vídeos": "vidrio", 
     "sensacional": "centroacinar", "centro asin arias": "centroacinares", "sinacinales": "centroacinares",
     "inflexión": "infeccioso", "infección": "infeccioso",
@@ -375,7 +368,7 @@ export default function RadiologyWorkstation() {
     } catch (e) { console.error("Error data:", e); }
   }, [user, isMobileMode]);
 
-  // Listener Móvil
+  // Listener Móvil (PC recibe texto)
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode || !db) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
@@ -384,8 +377,10 @@ export default function RadiologyWorkstation() {
         const rawInput = data.latestText;
         const currentRep = reportTextRef.current;
         
+        // Usamos la función de merge inteligente para evitar duplicados y puntuación doble
         if (!currentRep.trim().endsWith(rawInput)) {
              const processed = processText(rawInput, jargonDictRef.current, currentRep);
+             // Calcular espacio necesario
              const isPunctuation = /^[.,;:]/.test(processed);
              const space = (currentRep && !currentRep.endsWith(' ') && !currentRep.endsWith('\n') && !isPunctuation) ? ' ' : '';
              
@@ -414,6 +409,7 @@ export default function RadiologyWorkstation() {
     recognition.onstart = () => setIsPcListening(true);
     
     recognition.onend = () => {
+        // Auto-restart si se cortó pero la intención es seguir
         if (pcShouldListenRef.current) {
             try { recognition.start(); } catch(e) { setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200); }
         } else {
