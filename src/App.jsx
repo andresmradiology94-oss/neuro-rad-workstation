@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, FileInput, Clipboard, Keyboard } from 'lucide-react';
+import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, FileInput, Clipboard, Keyboard, RefreshCw } from 'lucide-react';
 
 // --- TU CONFIGURACIÓN (RADIO-A06EE) ---
 const firebaseConfig = {
@@ -103,29 +103,35 @@ const MEDICAL_CORRECTIONS = {
 };
 
 const applyMedicalContext = (text, userJargon = [], previousText = "") => {
+  if (!text) return "";
   let processed = text.toLowerCase();
 
+  // 1. Puntuación
   Object.keys(PUNCTUATION_MAP).forEach(punct => {
     const regex = new RegExp(`\\b${punct}\\b`, 'gi');
     processed = processed.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
+  // 2. Correcciones Médicas
   Object.keys(MEDICAL_CORRECTIONS).forEach(errorTerm => {
     const regex = new RegExp(`\\b${errorTerm}\\b`, 'gi');
     processed = processed.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
   });
 
+  // 3. Jerga del Usuario
   userJargon.forEach(item => {
      const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
      processed = processed.replace(regex, item.replacement);
   });
 
-  const trimmedPrev = previousText.trim();
+  // 4. Mayúsculas Inteligentes
+  const trimmedPrev = previousText ? previousText.trim() : "";
   const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
 
   if (endsWithPunctuation) {
     return processed.charAt(0).toUpperCase() + processed.slice(1);
   } else {
+    // Respetar siglas si ya vienen en mayúscula (ej: T1, FLAIR)
     if (processed.length > 1 && processed.charAt(0) === processed.charAt(0).toUpperCase()) {
         return processed;
     }
@@ -151,27 +157,25 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (V3: LÓGICA DE FLUJO LIBRE) ---
+// --- COMPONENTE MÓVIL (CORRECCIÓN DEFINITIVA DE DUPLICADOS) ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
-  const shouldListenRef = useRef(false);
   const recognitionRef = useRef(null);
+  const lastSentTextRef = useRef(""); // Guardamos el texto completo anterior
   
-  // Enviamos raw text y que la PC se encargue de no duplicar
-  const updateRemoteText = async (text) => {
-    if (!text || !user || !text.trim()) return;
+  const updateRemoteText = async (textChunk) => {
+    if (!textChunk || !user || !textChunk.trim()) return;
     try {
-      setLocalText(text); 
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
-        latestText: text.trim(),
+        latestText: textChunk.trim(),
         timestamp: Date.now(),
         lastActiveUser: user.uid
       }, { merge: true });
     } catch (e) {
-      setStatus('Reintentando...');
+      setStatus('Error de conexión...');
     }
   };
 
@@ -182,53 +186,57 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true;  // Permitimos flujo continuo
+    recognitionRef.current.continuous = true;  
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
-    recognitionRef.current.onstart = () => setStatus('Escuchando...');
+    recognitionRef.current.onstart = () => {
+        setStatus('Escuchando...');
+        lastSentTextRef.current = ""; // Resetear al iniciar nueva sesión de voz
+    };
+    
     recognitionRef.current.onend = () => {
-      if (shouldListenRef.current) {
-          try { recognitionRef.current.start(); } 
-          catch (e) { setTimeout(() => { if (shouldListenRef.current) recognitionRef.current.start(); }, 100); }
-      } else {
-          setIsListening(false);
-          setStatus('Pausado.');
-      }
+        setIsListening(false);
+        setStatus('Pausado.');
     };
 
     recognitionRef.current.onerror = (event) => {
       if (event.error === 'no-speech') return; 
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          shouldListenRef.current = false;
-          setIsListening(false);
-          setStatus('Error: Permiso denegado.');
-      }
+      setStatus('Error: ' + event.error);
+      setIsListening(false);
     };
 
-    // Variable local para trackear lo enviado en esta sesión de voz específica
-    let lastSentLength = 0;
-
     recognitionRef.current.onresult = (event) => {
-      let fullTranscript = '';
+      let currentFullTranscript = '';
+      let interimTranscript = '';
       
-      // Reconstruimos todo lo que tiene el navegador en memoria
+      // 1. Reconstruir todo lo que el navegador tiene en memoria ahora mismo
       for (let i = 0; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
-              fullTranscript += event.results[i][0].transcript;
+              currentFullTranscript += event.results[i][0].transcript;
+          } else {
+              interimTranscript += event.results[i][0].transcript;
           }
       }
 
-      // Si el transcript es más largo de lo que ya enviamos, enviamos la diferencia
-      if (fullTranscript.length > lastSentLength) {
-          const newPart = fullTranscript.substring(lastSentLength);
-          if (newPart.trim()) {
-              updateRemoteText(newPart);
-              lastSentLength = fullTranscript.length;
+      setLocalText(interimTranscript || "Procesando...");
+
+      // 2. Lógica Anti-Eco por Sustracción
+      // Verificamos si lo nuevo empieza con lo viejo
+      if (currentFullTranscript.startsWith(lastSentTextRef.current)) {
+          // Extraemos solo lo nuevo
+          const newChunk = currentFullTranscript.substring(lastSentTextRef.current.length);
+          
+          if (newChunk.trim().length > 0) {
+              updateRemoteText(newChunk);
+              lastSentTextRef.current = currentFullTranscript; // Actualizamos la memoria
           }
-      } else if (fullTranscript.length < lastSentLength) {
-          // El navegador reseteó su memoria (sucede en Android a veces)
-          lastSentLength = 0;
+      } else {
+          // El navegador se reseteó (pasa en Android), así que todo es nuevo
+          if (currentFullTranscript.trim().length > 0) {
+              updateRemoteText(currentFullTranscript);
+              lastSentTextRef.current = currentFullTranscript;
+          }
       }
     };
   }, [sessionId, user]);
@@ -236,17 +244,13 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const toggleMic = () => {
     if (!recognitionRef.current) return;
     if (isListening) {
-      shouldListenRef.current = false;
       recognitionRef.current.stop();
-      setIsListening(false);
     } else {
-      shouldListenRef.current = true;
       try {
         recognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        setStatus('Error. Toca de nuevo.');
-        shouldListenRef.current = false;
+        setStatus('Error al iniciar.');
       }
     }
   };
@@ -291,7 +295,7 @@ export default function RadiologyWorkstation() {
   
   const recognitionRef = useRef(null);
   const textareaRef = useRef(null);
-  const reportTextRef = useRef(''); // Ref para evitar cierres obsoletos (stale closures)
+  const reportTextRef = useRef(''); // Ref para evitar cierres obsoletos
   const jargonDictRef = useRef([]); 
 
   // Sincronizar Refs
@@ -317,6 +321,7 @@ export default function RadiologyWorkstation() {
     return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
   }, [user, isMobileMode]);
 
+  // Listener del Móvil
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
@@ -324,7 +329,6 @@ export default function RadiologyWorkstation() {
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
         const cleanText = applyMedicalContext(data.latestText, jargonDictRef.current, reportTextRef.current);
         setReportText(prev => {
-            if (prev.trim().endsWith(cleanText)) return prev;
             const isPunctuation = /^[.,;:]/.test(cleanText);
             const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
             return prev + space + cleanText;
@@ -335,14 +339,12 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- LÓGICA DE DICTADO PC ROBUSTA ---
+  // --- DICTADO PC CORREGIDO ---
   useEffect(() => {
     if (isMobileMode) return;
     
     if (window.SpeechRecognition || window.webkitSpeechRecognition) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      
-      // Creamos la instancia UNA VEZ
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
@@ -351,8 +353,12 @@ export default function RadiologyWorkstation() {
       recognition.onstart = () => setIsListening(true);
       recognition.onend = () => {
           setIsListening(false);
-          // Auto-reinicio si se corta inesperadamente y queríamos seguir escuchando
-          // (Aquí lo mantenemos simple: se apaga y el usuario debe volver a encenderlo si quiere)
+          // AUTO-GUARDADO AL DETENER: Si quedó algo pendiente en el buffer visual, lo forzamos al texto
+          if (pcInterimText) {
+              const cleanText = applyMedicalContext(pcInterimText, jargonDictRef.current, reportTextRef.current);
+              setReportText(prev => prev + ' ' + cleanText);
+              setPcInterimText('');
+          }
       };
 
       recognition.onresult = (e) => {
@@ -367,30 +373,28 @@ export default function RadiologyWorkstation() {
             }
         }
         
-        setPcInterimText(interimChunk);
+        setPcInterimText(interimChunk); // Actualizar feedback visual
 
         if(finalChunk) {
-            // Usamos Refs para acceder al estado más reciente sin reiniciar el efecto
-            const currentText = reportTextRef.current;
-            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, currentText);
-            
+            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, reportTextRef.current);
             setReportText(prev => {
                 const isPunctuation = /^[.,;:]/.test(cleanText);
                 const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
                 return prev + space + cleanText;
             });
-            setPcInterimText(''); 
+            setPcInterimText(''); // Limpiar buffer
         }
       };
       
       recognitionRef.current = recognition;
     }
-  }, [isMobileMode]); 
+  }, [isMobileMode]); // Dependencia vacía para inicializar una sola vez
 
   const toggleDictation = () => {
     if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
     if (isListening) {
         recognitionRef.current.stop();
+        // El guardado final ocurre en 'onend'
     } else { 
         try {
             recognitionRef.current.start(); 
@@ -465,7 +469,9 @@ export default function RadiologyWorkstation() {
                     />
                     {pcInterimText && (
                         <div className="absolute bottom-4 left-8 right-24 pointer-events-none">
-                            <span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse">{pcInterimText}</span>
+                            <span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse shadow-sm border border-indigo-100 backdrop-blur-sm">
+                                ... {pcInterimText}
+                            </span>
                         </div>
                     )}
                 </div>
