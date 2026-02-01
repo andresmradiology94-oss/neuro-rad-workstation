@@ -4,7 +4,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, deleteDoc, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Loader2, AlertTriangle, Clipboard } from 'lucide-react';
 
-// --- CONFIGURACIÓN DE FIREBASE ---
+// --- 1. CONFIGURACIÓN FIREBASE (RADIO-A06EE) ---
 const firebaseConfig = {
   apiKey: "AIzaSyAteWvkLVgv9rRsMLeK5BXuDKhw8nvppR4",
   authDomain: "radio-a06ee.firebaseapp.com",
@@ -15,8 +15,10 @@ const firebaseConfig = {
   measurementId: "G-XDJ6W8VH9K"
 };
 
-// --- INICIALIZACIÓN SEGURA ---
-let app, auth, db;
+// --- 2. INICIALIZACIÓN SEGURA (EVITA PANTALLA BLANCA) ---
+let app = null;
+let auth = null;
+let db = null;
 let initError = "";
 
 try {
@@ -24,24 +26,24 @@ try {
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (e) {
+  console.error("Error crítico inicializando Firebase:", e);
   initError = e.message;
-  console.error("Firebase Error:", e);
 }
 
 const appId = 'neuro-rad-prod'; 
 
-// --- PROCESAMIENTO DE TEXTO ---
+// --- 3. PROCESAMIENTO DE TEXTO (LÓGICA MÉDICA) ---
 const processText = (rawText, userJargon = [], previousText = "") => {
   if (!rawText) return "";
   
-  // 1. Limpieza inicial
+  // Limpieza inicial
   let cleanedRaw = rawText;
   if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
       cleanedRaw = cleanedRaw.replace(/\.$/, '');
   }
   let text = cleanedRaw.toLowerCase();
 
-  // 2. Mapeo de Puntuación
+  // Mapeo de Puntuación
   const PUNCTUATION_MAP = {
     "punto y aparte": ".\n", "punto aparte": ".\n", "nuevo párrafo": "\n\n",
     "punto y seguido": ".", "punto": ".", "coma": ",", "dos puntos": ":",
@@ -54,7 +56,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
     text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // 3. Correcciones Médicas
+  // Correcciones Médicas
   const MEDICAL_CORRECTIONS = {
     "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
     "videos": "vidrio", "vídeos": "vidrio",
@@ -84,13 +86,17 @@ const processText = (rawText, userJargon = [], previousText = "") => {
     text = text.replace(regex, MEDICAL_CORRECTIONS[term]);
   });
 
-  // 4. Jerga Usuario
-  userJargon.forEach(item => {
-     const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
-     text = text.replace(regex, item.replacement);
-  });
+  // Jerga Usuario
+  if (Array.isArray(userJargon)) {
+    userJargon.forEach(item => {
+       if (item && item.trigger && item.replacement) {
+         const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
+         text = text.replace(regex, item.replacement);
+       }
+    });
+  }
 
-  // 5. Mayúsculas Inteligentes
+  // Mayúsculas Inteligentes
   const trimmedPrev = previousText ? previousText.trim() : "";
   const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
 
@@ -100,7 +106,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   return text;
 };
 
-// --- COMPONENTES ---
+// --- 4. COMPONENTE MÓVIL (MICRÓFONO) ---
 const MobileMicInterface = ({ sessionId, user }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
@@ -110,6 +116,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
 
   const sendText = async (text) => {
     if (!text || !user || !text.trim()) return;
+    if (!db) return; // Protección contra crash
     try {
       const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
       await setDoc(sessionRef, {
@@ -128,9 +135,14 @@ const MobileMicInterface = ({ sessionId, user }) => {
       return;
     }
     
+    // Limpiar instancia previa
+    if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch(e) {}
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.continuous = false; // MODO RÁFAGA (Corta eco)
+    recognition.continuous = false; // Modo ráfaga para evitar eco en Android
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
@@ -148,6 +160,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
     };
 
     recognition.onerror = (event) => {
+      // Ignorar errores no críticos
       if (event.error === 'no-speech') return; 
       if (event.error === 'not-allowed') {
          shouldListenRef.current = false;
@@ -168,7 +181,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
     };
 
     recognitionRef.current = recognition;
-    try { recognition.start(); } catch(e) {}
+    try { recognition.start(); } catch(e) { console.error(e); }
   };
 
   const toggleMic = () => {
@@ -192,7 +205,24 @@ const MobileMicInterface = ({ sessionId, user }) => {
   );
 };
 
-// --- APP PRINCIPAL ---
+// --- 5. COMPONENTES UI AUXILIARES ---
+const SidebarItem = ({ icon: Icon, label, active, onClick }) => (
+  <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${active ? 'bg-indigo-50 text-indigo-700 border-r-4 border-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}>
+    <Icon size={18} /> {label}
+  </button>
+);
+
+const Modal = ({ title, onClose, children }) => (
+  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div className="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden p-6 relative">
+      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400"><X size={20}/></button>
+      <h3 className="font-bold text-lg mb-4">{title}</h3>
+      {children}
+    </div>
+  </div>
+);
+
+// --- 6. APP PRINCIPAL ---
 export default function RadiologyWorkstation() {
   const [user, setUser] = useState(null);
   const [isMobileMode, setIsMobileMode] = useState(false);
@@ -200,20 +230,25 @@ export default function RadiologyWorkstation() {
   const [activeTab, setActiveTab] = useState('workstation');
   const [configSection, setConfigSection] = useState('centers');
   
+  // Datos
   const [centers, setCenters] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [jargonDict, setJargonDict] = useState([]);
   
+  // Estado App
   const [currentCenterId, setCurrentCenterId] = useState('');
   const [reportText, setReportText] = useState('');
   
+  // Estado Micro PC
   const [isPcListening, setIsPcListening] = useState(false);
   const pcRecognitionRef = useRef(null);
+  const pcShouldListenRef = useRef(false);
+  const [pcInterimText, setPcInterimText] = useState(''); 
+  const [pcError, setPcError] = useState('');
   
+  // UI States
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
-  const [pcInterimText, setPcInterimText] = useState(''); 
-  
   const [showCenterModal, setShowCenterModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [tempData, setTempData] = useState({});
@@ -222,44 +257,61 @@ export default function RadiologyWorkstation() {
   const reportTextRef = useRef(''); 
   const jargonDictRef = useRef([]); 
 
+  // Sync Refs
   useEffect(() => { reportTextRef.current = reportText; }, [reportText]);
   useEffect(() => { jargonDictRef.current = jargonDict; }, [jargonDict]);
 
+  // Inicialización Auth
   useEffect(() => {
+    // Si hubo error crítico de firebase, no hacemos nada para evitar crash
     if (initError) return;
+
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'mic') { setIsMobileMode(true); setMobileSessionId(params.get('session')); }
-    signInAnonymously(auth).catch(console.error);
-    return onAuthStateChanged(auth, setUser);
+    
+    // Safety check para auth
+    if (auth) {
+        signInAnonymously(auth).catch(console.error);
+        return onAuthStateChanged(auth, setUser);
+    }
   }, []);
 
+  // Carga de Datos (Protegida)
   useEffect(() => {
     if (!user || !db || isMobileMode) return;
-    const unsubCenters = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), s => {
-      const data = s.docs.map(d => ({id: d.id, ...d.data()}));
-      setCenters(data);
-      if (!currentCenterId && data.length > 0) setCurrentCenterId(data[0].id);
-    });
-    const unsubTemplates = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), s => setTemplates(s.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubJargon = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), s => setJargonDict(s.docs.map(d => ({id: d.id, ...d.data()}))));
-    return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
+    
+    // Safety checks antes de llamar a collection
+    try {
+        const unsubCenters = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), s => {
+          const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+          setCenters(data);
+          if (!currentCenterId && data.length > 0) setCurrentCenterId(data[0].id);
+        });
+        
+        const unsubTemplates = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), s => setTemplates(s.docs.map(d => ({id: d.id, ...d.data()}))));
+        const unsubJargon = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), s => setJargonDict(s.docs.map(d => ({id: d.id, ...d.data()}))));
+        
+        return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
+    } catch (e) {
+        console.error("Error cargando datos:", e);
+    }
   }, [user, isMobileMode]);
 
-  // Listener Móvil (PC recibe texto)
+  // Listener del Móvil
   useEffect(() => {
-    if (isMobileMode || !remoteSessionCode) return;
+    if (isMobileMode || !remoteSessionCode || !db) return;
+    
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
       const data = docSnap.data();
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
         const rawInput = data.latestText;
         const currentRep = reportTextRef.current;
-        // Solo agregamos si no es exactamente igual a lo último (filtro básico)
+        
+        // Filtro de duplicados
         if (!currentRep.trim().endsWith(rawInput)) {
              const processed = processText(rawInput, jargonDictRef.current, currentRep);
-             // Espaciado inteligente
              const isPunctuation = /^[.,;:]/.test(processed);
              const space = (currentRep && !currentRep.endsWith(' ') && !currentRep.endsWith('\n') && !isPunctuation) ? ' ' : '';
-             
              setReportText(prev => prev + space + processed);
         }
         updateDoc(docSnap.ref, { latestText: '' }); 
@@ -268,30 +320,48 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC (VERSIÓN SIMPLE) ---
+  // --- LÓGICA DE MICRO PC ---
   const togglePcDictation = () => {
     if (!window.webkitSpeechRecognition && !window.SpeechRecognition) return alert("Usa Chrome.");
     
-    if (isPcListening) {
+    if (pcShouldListenRef.current) {
+        // Apagar
+        pcShouldListenRef.current = false;
         if (pcRecognitionRef.current) pcRecognitionRef.current.stop();
         setIsPcListening(false);
-        return;
+    } else {
+        // Encender
+        pcShouldListenRef.current = true;
+        startPcDictation();
     }
+  };
 
+  const startPcDictation = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
-    recognition.onstart = () => setIsPcListening(true);
+    recognition.onstart = () => { setIsPcListening(true); setPcError(''); };
     
-    recognition.onend = () => setIsPcListening(false);
+    recognition.onend = () => {
+        // Si la intención es seguir, reiniciamos (Loop infinito hasta stop manual)
+        if (pcShouldListenRef.current) {
+            try { recognition.start(); } catch(e) { 
+                setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200); 
+            }
+        } else {
+            setIsPcListening(false);
+        }
+    };
     
     recognition.onerror = (e) => {
-        console.error("PC Mic Error:", e.error);
-        if (e.error === 'not-allowed') alert("Permiso denegado. Revisa el candado en la URL.");
-        setIsPcListening(false);
+        if (e.error === 'not-allowed') {
+            pcShouldListenRef.current = false;
+            setIsPcListening(false);
+            setPcError('Permiso denegado');
+        }
     };
 
     recognition.onresult = (e) => {
@@ -307,27 +377,26 @@ export default function RadiologyWorkstation() {
         if(finalChunk) {
             const currentRep = reportTextRef.current;
             const processed = processText(finalChunk, jargonDictRef.current, currentRep);
-            
             const isPunctuation = /^[.,;:]/.test(processed);
             const space = (currentRep && !currentRep.endsWith(' ') && !currentRep.endsWith('\n') && !isPunctuation) ? ' ' : '';
-            
             setReportText(prev => prev + space + processed);
             setPcInterimText(''); 
         }
     };
 
     pcRecognitionRef.current = recognition;
-    recognition.start();
+    try { recognition.start(); } catch(e) { console.error(e); }
   };
 
+  // Funciones Auxiliares
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
-  const addCenter = async () => { if(tempData.name) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), {name: tempData.name}); setTempData({}); setShowCenterModal(false); }};
-  const addTemplate = async () => { if(tempData.title) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {title: tempData.title, content: tempData.content, centerId: tempData.centerId || 'global'}); setTempData({}); setShowTemplateModal(false); }};
-  const addJargon = async () => { if(tempData.trigger) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), {trigger: tempData.trigger.toLowerCase(), replacement: tempData.replacement}); setTempData({}); }};
-  const deleteItem = async (col, id) => { if(confirm('¿Eliminar?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
+  const addCenter = async () => { if(tempData.name && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), {name: tempData.name}); setTempData({}); setShowCenterModal(false); }};
+  const addTemplate = async () => { if(tempData.title && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {title: tempData.title, content: tempData.content, centerId: tempData.centerId || 'global'}); setTempData({}); setShowTemplateModal(false); }};
+  const addJargon = async () => { if(tempData.trigger && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), {trigger: tempData.trigger.toLowerCase(), replacement: tempData.replacement}); setTempData({}); }};
+  const deleteItem = async (col, id) => { if(confirm('¿Eliminar?') && db && user) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
 
-  // Renderizado Condicional Seguro
-  if (initError) return <div className="p-10 text-red-600 font-bold bg-white h-screen">Error de Configuración: {initError}</div>;
+  // --- RENDERIZADO ---
+  if (initError) return <div className="h-screen flex items-center justify-center bg-red-50 text-red-600 p-8 font-bold text-center"><div><AlertTriangle size={48} className="mx-auto mb-4"/>Error Crítico:<br/>{initError}</div></div>;
   if (isMobileMode) return <MobileMicInterface sessionId={mobileSessionId} user={user} />;
 
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.href.split('?')[0]}?mode=mic&session=${remoteSessionCode}`)}`;
@@ -376,6 +445,7 @@ export default function RadiologyWorkstation() {
                         className="w-full h-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"
                     />
                     {pcInterimText && (<div className="absolute bottom-4 left-8 right-24 pointer-events-none"><span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse shadow-sm border border-indigo-100 backdrop-blur-sm">... {pcInterimText}</span></div>)}
+                    {pcError && (<div className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded text-sm font-bold flex items-center gap-2"><AlertTriangle size={14}/> {pcError}</div>)}
                 </div>
                 <button onClick={togglePcDictation} className={`absolute bottom-8 right-8 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-105 ${isPcListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>{isPcListening ? <MicOff size={28}/> : <Mic size={28}/>}</button>
               </div>
