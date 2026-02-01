@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, deleteDoc, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, Clipboard } from 'lucide-react';
+import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Loader2, AlertTriangle, Clipboard } from 'lucide-react';
 
-// --- TU CONFIGURACIÓN (RADIO-A06EE) ---
+// --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = {
   apiKey: "AIzaSyAteWvkLVgv9rRsMLeK5BXuDKhw8nvppR4",
   authDomain: "radio-a06ee.firebaseapp.com",
@@ -15,108 +15,98 @@ const firebaseConfig = {
   measurementId: "G-XDJ6W8VH9K"
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// --- INICIALIZACIÓN SEGURA ---
+let app, auth, db;
+let initError = "";
+
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  initError = e.message;
+  console.error("Firebase Error:", e);
+}
+
 const appId = 'neuro-rad-prod'; 
 
-// --- BASE DE DATOS DE CORRECCIONES MÉDICAS ---
-const MEDICAL_CORRECTIONS = {
-  "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
-  "videos": "vidrio", "vídeos": "vidrio",
-  "sensacional": "centroacinar", "centro asin arias": "centroacinares", "centroacinares": "centroacinares", "sinacinales": "centroacinares",
-  "inflexión": "infeccioso", "infección": "infeccioso",
-  "brote": "brote", "árbol en brote": "árbol en brote",
-  "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
-  "esmerilado": "esmerilado", "deslustrado": "deslustrado",
-  "neumotórax": "neumotórax", "derrame plural": "derrame pleural",
-  "costodiafragmático": "costodiafragmático", "mediastínico": "mediastínico",
-  "hiliar": "hiliar", "parénquima": "parénquima", "intersticial": "intersticial",
-  "alveolar": "alveolar", "consolidación": "consolidación",
-  "bronquiectasias": "bronquiectasias", "broncograma": "broncograma",
-  "hígado graso": "esteatosis hepática", "litiasis": "litiasis",
-  "colelitiasis": "colelitiasis", "colédoco": "colédoco", "páncreas": "páncreas",
-  "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
-  "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
-  "ventrículos": "ventrículos", "silla turca": "silla turca",
-  "de uno": "T1", "t 1": "T1", "te uno": "T1",
-  "de dos": "T2", "t 2": "T2", "te dos": "T2",
-  "flair": "FLAIR", "fler": "FLAIR", "stir": "STIR", "estir": "STIR",
-  "difusión": "DWI", "adc": "ADC", "gadolinio": "gadolinio"
-};
-
-// --- PROCESAMIENTO DE TEXTO INTELIGENTE ---
-const processText = (rawText, userJargon = []) => {
+// --- PROCESAMIENTO DE TEXTO ---
+const processText = (rawText, userJargon = [], previousText = "") => {
   if (!rawText) return "";
-  let text = rawText.toLowerCase(); // Normalizar para búsqueda
+  
+  // 1. Limpieza inicial
+  let cleanedRaw = rawText;
+  if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
+      cleanedRaw = cleanedRaw.replace(/\.$/, '');
+  }
+  let text = cleanedRaw.toLowerCase();
 
-  // 1. REEMPLAZO DE COMANDOS DE PUNTUACIÓN (Regex avanzada para tolerar errores)
-  // Detecta "punto aparte", "punto y aparte", "punto. Aparte", etc.
-  const punctuationRules = [
-    { regex: /punto\s*[.,]?\s*y\s*aparte/gi, replacement: ".\n" },
-    { regex: /punto\s*[.,]?\s*aparte/gi, replacement: ".\n" },
-    { regex: /nuevo\s*p[áa]rrafo/gi, replacement: "\n\n" },
-    { regex: /punto\s*[.,]?\s*y\s*seguido/gi, replacement: "." },
-    { regex: /\bcoma\b/gi, replacement: "," },
-    { regex: /dos\s*puntos/gi, replacement: ":" },
-    { regex: /punto\s*y\s*coma/gi, replacement: ";" },
-    { regex: /abrir\s*par[ée]ntesis/gi, replacement: "(" },
-    { regex: /cerrar\s*par[ée]ntesis/gi, replacement: ")" },
-    { regex: /\bbarra\b/gi, replacement: "/" },
-    { regex: /\bgui[óo]n\b/gi, replacement: "-" },
-    // "punto" aislado (al final para no romper "punto aparte")
-    { regex: /\bpunto\b/gi, replacement: "." }
-  ];
-
-  punctuationRules.forEach(rule => {
-    text = text.replace(rule.regex, rule.replacement);
+  // 2. Mapeo de Puntuación
+  const PUNCTUATION_MAP = {
+    "punto y aparte": ".\n", "punto aparte": ".\n", "nuevo párrafo": "\n\n",
+    "punto y seguido": ".", "punto": ".", "coma": ",", "dos puntos": ":",
+    "punto y coma": ";", "abrir paréntesis": "(", "cerrar paréntesis": ")",
+    "barra": "/", "guión": "-"
+  };
+  
+  Object.keys(PUNCTUATION_MAP).forEach(punct => {
+    const regex = new RegExp(`\\b${punct}\\b`, 'gi');
+    text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // 2. CORRECCIONES MÉDICAS
-  Object.keys(MEDICAL_CORRECTIONS).forEach(errorTerm => {
-    const regex = new RegExp(`\\b${errorTerm}\\b`, 'gi');
-    text = text.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
+  // 3. Correcciones Médicas
+  const MEDICAL_CORRECTIONS = {
+    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
+    "videos": "vidrio", "vídeos": "vidrio",
+    "sensacional": "centroacinar", "centro asin arias": "centroacinares", "centroacinares": "centroacinares", "sinacinales": "centroacinares",
+    "inflexión": "infeccioso", "infección": "infeccioso",
+    "brote": "brote", "árbol en brote": "árbol en brote",
+    "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
+    "esmerilado": "esmerilado", "deslustrado": "deslustrado",
+    "neumotórax": "neumotórax", "derrame plural": "derrame pleural",
+    "costodiafragmático": "costodiafragmático", "mediastínico": "mediastínico",
+    "hiliar": "hiliar", "parénquima": "parénquima", "intersticial": "intersticial",
+    "alveolar": "alveolar", "consolidación": "consolidación",
+    "bronquiectasias": "bronquiectasias", "broncograma": "broncograma",
+    "hígado graso": "esteatosis hepática", "litiasis": "litiasis",
+    "colelitiasis": "colelitiasis", "colédoco": "colédoco", "páncreas": "páncreas",
+    "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
+    "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
+    "ventrículos": "ventrículos", "silla turca": "silla turca",
+    "de uno": "T1", "t 1": "T1", "te uno": "T1",
+    "de dos": "T2", "t 2": "T2", "te dos": "T2",
+    "flair": "FLAIR", "fler": "FLAIR", "stir": "STIR", "estir": "STIR",
+    "difusión": "DWI", "adc": "ADC", "gadolinio": "gadolinio"
+  };
+
+  Object.keys(MEDICAL_CORRECTIONS).forEach(term => {
+    const regex = new RegExp(`\\b${term}\\b`, 'gi');
+    text = text.replace(regex, MEDICAL_CORRECTIONS[term]);
   });
 
-  // 3. JERGA DEL USUARIO
+  // 4. Jerga Usuario
   userJargon.forEach(item => {
      const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
      text = text.replace(regex, item.replacement);
   });
 
-  // 4. LIMPIEZA GRAMATICAL LOCAL
-  // Quitar espacios antes de puntuación: "hola ." -> "hola."
-  text = text.replace(/\s+([.,;:])/g, '$1');
-  // Eliminar dobles puntos locales: ".." -> "."
-  text = text.replace(/\.\./g, '.');
-  
-  return text; // Devolvemos el texto procesado (aún puede estar todo en minúsculas)
+  // 5. Mayúsculas Inteligentes
+  const trimmedPrev = previousText ? previousText.trim() : "";
+  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
+
+  if (endsWithPunctuation) {
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  } 
+  return text;
 };
 
-// --- COMPONENTES UI ---
-const SidebarItem = ({ icon: Icon, label, active, onClick }) => (
-  <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${active ? 'bg-indigo-50 text-indigo-700 border-r-4 border-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}>
-    <Icon size={18} /> {label}
-  </button>
-);
-
-const Modal = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-    <div className="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden p-6 relative">
-      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400"><X size={20}/></button>
-      <h3 className="font-bold text-lg mb-4">{title}</h3>
-      {children}
-    </div>
-  </div>
-);
-
-// --- COMPONENTE MÓVIL (MODO RÁFAGA/VACIADO) ---
+// --- COMPONENTES ---
 const MobileMicInterface = ({ sessionId, user }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const recognitionRef = useRef(null);
-  const shouldListenRef = useRef(false); // Bandera de intención del usuario
+  const shouldListenRef = useRef(false);
 
   const sendText = async (text) => {
     if (!text || !user || !text.trim()) return;
@@ -128,40 +118,28 @@ const MobileMicInterface = ({ sessionId, user }) => {
         lastActiveUser: user.uid
       }, { merge: true });
     } catch (e) {
-      setStatus('Reintentando...');
+      setStatus('Error de Red...');
     }
   };
 
   const startRecognition = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setStatus('Navegador no soportado (Usa Chrome).');
+    if (!window.webkitSpeechRecognition && !window.SpeechRecognition) {
+      setStatus('Navegador no soportado.');
       return;
     }
     
-    // Limpieza de instancia previa
-    if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch(e) {}
-    }
-
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    
-    // SECUENCIAL ESTRICTO: Para evitar eco en Android, forzamos reinicio tras cada frase
-    recognition.continuous = false; 
+    recognition.continuous = false; // MODO RÁFAGA (Corta eco)
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
-    recognition.onstart = () => {
-      setStatus('Escuchando...');
-      setIsListening(true);
-    };
-
+    recognition.onstart = () => { setStatus('Escuchando...'); setIsListening(true); };
+    
     recognition.onend = () => {
-      // Loop infinito controlado: Si el usuario quiere seguir, reiniciamos
       if (shouldListenRef.current) {
           try { recognition.start(); } catch(e) { 
-              // Backoff si falla el reinicio inmediato
-              setTimeout(() => { if (shouldListenRef.current) startRecognition(); }, 200); 
+              setTimeout(() => { if(shouldListenRef.current) startRecognition(); }, 200);
           }
       } else {
           setIsListening(false);
@@ -170,7 +148,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
     };
 
     recognition.onerror = (event) => {
-      if (event.error === 'no-speech') return; // Ignorar silencio
+      if (event.error === 'no-speech') return; 
       if (event.error === 'not-allowed') {
          shouldListenRef.current = false;
          setStatus('Permiso denegado.');
@@ -179,33 +157,26 @@ const MobileMicInterface = ({ sessionId, user }) => {
     };
 
     recognition.onresult = (event) => {
-      let interim = '';
       let final = '';
-      
+      let interim = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) final += event.results[i][0].transcript;
         else interim += event.results[i][0].transcript;
       }
-      
       setLocalText(interim || "...");
-      
-      if (final.trim()) {
-        sendText(final);
-      }
+      if (final.trim()) sendText(final);
     };
 
     recognitionRef.current = recognition;
-    try { recognition.start(); } catch(e) { console.error(e); }
+    try { recognition.start(); } catch(e) {}
   };
 
   const toggleMic = () => {
     if (shouldListenRef.current) {
-      // APAGAR
       shouldListenRef.current = false;
       if (recognitionRef.current) recognitionRef.current.stop();
       setIsListening(false);
     } else {
-      // ENCENDER
       shouldListenRef.current = true;
       startRecognition();
     }
@@ -214,13 +185,8 @@ const MobileMicInterface = ({ sessionId, user }) => {
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center">
       <div className="mb-8"><h2 className="text-xl font-bold text-indigo-300 flex items-center justify-center gap-2"><Smartphone/> Modo Remoto</h2><p className="text-xs text-slate-500 font-mono mt-1">Sesión: {sessionId}</p></div>
-      <button onClick={toggleMic} className={`w-32 h-32 rounded-full flex items-center justify-center shadow-2xl transition-all ${isListening ? 'bg-red-500 scale-110 animate-pulse' : 'bg-indigo-600'}`}>
-        {isListening ? <Mic size={48}/> : <MicOff size={48}/>}
-      </button>
-      <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]">
-        <p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor</p>
-        <p className="text-lg font-medium text-white leading-relaxed">{localText || <span className="text-slate-600 italic">Esperando voz...</span>}</p>
-      </div>
+      <button onClick={toggleMic} className={`w-32 h-32 rounded-full flex items-center justify-center shadow-2xl transition-all ${isListening ? 'bg-red-500 scale-110 animate-pulse' : 'bg-indigo-600'}`}>{isListening ? <Mic size={48}/> : <MicOff size={48}/>}</button>
+      <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]"><p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor</p><p className="text-lg font-medium text-white leading-relaxed">{localText || <span className="text-slate-600 italic">Esperando voz...</span>}</p></div>
       <p className="mt-6 text-sm text-slate-400 max-w-xs">{status}</p>
     </div>
   );
@@ -241,10 +207,8 @@ export default function RadiologyWorkstation() {
   const [currentCenterId, setCurrentCenterId] = useState('');
   const [reportText, setReportText] = useState('');
   
-  // ESTADO PC
   const [isPcListening, setIsPcListening] = useState(false);
   const pcRecognitionRef = useRef(null);
-  const pcShouldListenRef = useRef(false);
   
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
@@ -255,7 +219,6 @@ export default function RadiologyWorkstation() {
   const [tempData, setTempData] = useState({});
   
   const textareaRef = useRef(null);
-  // Refs para acceso síncrono dentro de callbacks de eventos
   const reportTextRef = useRef(''); 
   const jargonDictRef = useRef([]); 
 
@@ -263,6 +226,7 @@ export default function RadiologyWorkstation() {
   useEffect(() => { jargonDictRef.current = jargonDict; }, [jargonDict]);
 
   useEffect(() => {
+    if (initError) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'mic') { setIsMobileMode(true); setMobileSessionId(params.get('session')); }
     signInAnonymously(auth).catch(console.error);
@@ -281,94 +245,37 @@ export default function RadiologyWorkstation() {
     return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
   }, [user, isMobileMode]);
 
-  // --- FUNCIÓN DE MERGE INTELIGENTE (LA CLAVE) ---
-  const mergeText = (currentReport, newFragmentRaw) => {
-      // 1. Procesar fragmento nuevo (correcciones, puntuación)
-      const processedFragment = processText(newFragmentRaw, jargonDictRef.current);
-      
-      if (!processedFragment) return currentReport;
-
-      // 2. Análisis del texto existente (El final)
-      const trimmedReport = currentReport.trimEnd();
-      
-      // 3. Chequeo de Capitalización
-      // ¿Termina lo anterior en punto, salto o está vacío?
-      const endsInStopper = trimmedReport.length === 0 || ['.', '\n', '!', '?'].some(c => trimmedPrevChar(trimmedReport) === c);
-      
-      let finalFragment = processedFragment;
-      
-      // Si toca mayúscula, la aplicamos. Si no, mantenemos minúscula (salvo siglas)
-      if (endsInStopper) {
-          finalFragment = finalFragment.charAt(0).toUpperCase() + finalFragment.slice(1);
-      } else {
-          // Si no es sigla (ej T1), forzamos minúscula para continuidad de frase
-          const isAcronym = finalFragment.length > 1 && finalFragment === finalFragment.toUpperCase();
-          if (!isAcronym) {
-              // Corrección extra: Si es nombre propio o corrección médica capitalizada (ej: Wirsung), no bajarla
-              // Simplificado: solo bajar primera letra
-              finalFragment = finalFragment.charAt(0).toLowerCase() + finalFragment.slice(1);
-          }
-      }
-
-      // 4. Fusión de Puntuación (Evitar "..")
-      // Si lo nuevo empieza con punto y lo viejo termina con punto, borramos uno
-      if (trimmedReport.endsWith('.') && finalFragment.startsWith('.')) {
-          finalFragment = finalFragment.substring(1);
-      }
-      // Caso especial: "punto y aparte" (`.\n`)
-      // Si viejo termina en `.`, y nuevo es `.\n`, resultado debe ser `.\n` (no `..\n`)
-      if (trimmedReport.endsWith('.') && finalFragment.startsWith('.\n')) {
-          finalFragment = finalFragment.substring(1); // Deja solo el \n
-      }
-
-      // 5. Espaciado Automático
-      // Agregar espacio si:
-      // - No está vacío
-      // - No termina en salto de línea
-      // - No termina en espacio
-      // - Lo nuevo NO es un signo de puntuación (.,;:)
-      const isPunctuation = /^[.,;:]/.test(finalFragment);
-      const needsSpace = trimmedReport.length > 0 && !trimmedReport.endsWith('\n') && !isPunctuation;
-
-      return trimmedReport + (needsSpace ? ' ' : '') + finalFragment;
-  };
-
-  // Helper para ver último caracter real
-  const trimmedPrevChar = (str) => {
-      if (!str) return '';
-      return str.charAt(str.length - 1);
-  };
-
-  // Listener del Móvil (PC)
+  // Listener Móvil (PC recibe texto)
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
       const data = docSnap.data();
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
-        
         const rawInput = data.latestText;
-        
-        // Filtro de duplicados básico (por si el móvil falla en su filtro)
-        // Solo si el texto NO está ya al final del reporte
         const currentRep = reportTextRef.current;
-        const simpleCheck = processText(rawInput, jargonDictRef.current).trim();
-        
-        if (!currentRep.trim().endsWith(simpleCheck)) {
-             setReportText(prev => mergeText(prev, rawInput));
+        // Solo agregamos si no es exactamente igual a lo último (filtro básico)
+        if (!currentRep.trim().endsWith(rawInput)) {
+             const processed = processText(rawInput, jargonDictRef.current, currentRep);
+             // Espaciado inteligente
+             const isPunctuation = /^[.,;:]/.test(processed);
+             const space = (currentRep && !currentRep.endsWith(' ') && !currentRep.endsWith('\n') && !isPunctuation) ? ' ' : '';
+             
+             setReportText(prev => prev + space + processed);
         }
-        
         updateDoc(docSnap.ref, { latestText: '' }); 
       }
     });
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC (CONFIGURACIÓN ESTABLE) ---
-  const startPcDictation = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return alert("Usa Chrome.");
+  // --- DICTADO PC (VERSIÓN SIMPLE) ---
+  const togglePcDictation = () => {
+    if (!window.webkitSpeechRecognition && !window.SpeechRecognition) return alert("Usa Chrome.");
     
-    if (pcRecognitionRef.current) {
-        try { pcRecognitionRef.current.abort(); } catch(e) {}
+    if (isPcListening) {
+        if (pcRecognitionRef.current) pcRecognitionRef.current.stop();
+        setIsPcListening(false);
+        return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -377,25 +284,14 @@ export default function RadiologyWorkstation() {
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
-    recognition.onstart = () => {
-        setIsPcListening(true);
-        setPcError('');
-    };
+    recognition.onstart = () => setIsPcListening(true);
     
-    recognition.onend = () => {
-        if (pcShouldListenRef.current) {
-            try { recognition.start(); } catch(e) { setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200); }
-        } else {
-            setIsPcListening(false);
-        }
-    };
+    recognition.onend = () => setIsPcListening(false);
     
     recognition.onerror = (e) => {
-        if (e.error === 'not-allowed') {
-            pcShouldListenRef.current = false;
-            setIsPcListening(false);
-            setPcError('Permiso denegado');
-        }
+        console.error("PC Mic Error:", e.error);
+        if (e.error === 'not-allowed') alert("Permiso denegado. Revisa el candado en la URL.");
+        setIsPcListening(false);
     };
 
     recognition.onresult = (e) => {
@@ -409,7 +305,13 @@ export default function RadiologyWorkstation() {
         setPcInterimText(interimChunk);
 
         if(finalChunk) {
-            setReportText(prev => mergeText(prev, finalChunk));
+            const currentRep = reportTextRef.current;
+            const processed = processText(finalChunk, jargonDictRef.current, currentRep);
+            
+            const isPunctuation = /^[.,;:]/.test(processed);
+            const space = (currentRep && !currentRep.endsWith(' ') && !currentRep.endsWith('\n') && !isPunctuation) ? ' ' : '';
+            
+            setReportText(prev => prev + space + processed);
             setPcInterimText(''); 
         }
     };
@@ -418,34 +320,15 @@ export default function RadiologyWorkstation() {
     recognition.start();
   };
 
-  const togglePcDictation = () => {
-    if (pcShouldListenRef.current) {
-        pcShouldListenRef.current = false;
-        if (pcRecognitionRef.current) pcRecognitionRef.current.stop();
-        setIsPcListening(false);
-    } else {
-        pcShouldListenRef.current = true;
-        startPcDictation();
-    }
-  };
-
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
   const addCenter = async () => { if(tempData.name) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), {name: tempData.name}); setTempData({}); setShowCenterModal(false); }};
-  const addTemplate = async () => { 
-      if(tempData.title) { 
-          await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {
-              title: tempData.title, 
-              content: tempData.content, 
-              centerId: tempData.centerId || 'global'
-          }); 
-          setTempData({}); 
-          setShowTemplateModal(false); 
-      }
-  };
+  const addTemplate = async () => { if(tempData.title) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {title: tempData.title, content: tempData.content, centerId: tempData.centerId || 'global'}); setTempData({}); setShowTemplateModal(false); }};
   const addJargon = async () => { if(tempData.trigger) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), {trigger: tempData.trigger.toLowerCase(), replacement: tempData.replacement}); setTempData({}); }};
   const deleteItem = async (col, id) => { if(confirm('¿Eliminar?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
 
-  if (isMobileMode) return <MobileMicInterface sessionId={mobileSessionId} user={user} isOnline={navigator.onLine} />;
+  // Renderizado Condicional Seguro
+  if (initError) return <div className="p-10 text-red-600 font-bold bg-white h-screen">Error de Configuración: {initError}</div>;
+  if (isMobileMode) return <MobileMicInterface sessionId={mobileSessionId} user={user} />;
 
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.href.split('?')[0]}?mode=mic&session=${remoteSessionCode}`)}`;
   const visibleTemplates = templates.filter(t => t.centerId === 'global' || t.centerId === currentCenterId);
@@ -492,20 +375,8 @@ export default function RadiologyWorkstation() {
                         placeholder="Comienza a dictar..." 
                         className="w-full h-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"
                     />
-                    {pcInterimText && (
-                        <div className="absolute bottom-4 left-8 right-24 pointer-events-none">
-                            <span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse shadow-sm border border-indigo-100 backdrop-blur-sm">
-                                ... {pcInterimText}
-                            </span>
-                        </div>
-                    )}
-                    {pcError && (
-                        <div className="absolute top-4 right-4 bg-red-100 text-red-600 px-3 py-1 rounded text-sm font-bold flex items-center gap-2">
-                            <AlertTriangle size={14}/> {pcError}
-                        </div>
-                    )}
+                    {pcInterimText && (<div className="absolute bottom-4 left-8 right-24 pointer-events-none"><span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse shadow-sm border border-indigo-100 backdrop-blur-sm">... {pcInterimText}</span></div>)}
                 </div>
-                
                 <button onClick={togglePcDictation} className={`absolute bottom-8 right-8 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-105 ${isPcListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>{isPcListening ? <MicOff size={28}/> : <Mic size={28}/>}</button>
               </div>
             </div>
