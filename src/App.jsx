@@ -30,11 +30,10 @@ try {
   initError = e.message;
 }
 
-const appId = 'neuro-rad-prod'; 
+const appId = 'neuro-rad-prod';
 
 // --- 3. PROCESAMIENTO DE TEXTO (LÓGICA MAESTRA) ---
 
-// Función para escapar caracteres especiales en Regex (Evita crash por T2*)
 const escapeRegExp = (string) => {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
@@ -42,14 +41,13 @@ const escapeRegExp = (string) => {
 const processText = (rawText, userJargon = [], previousText = "") => {
   if (!rawText) return "";
   
-  // Limpieza inicial
   let cleanedRaw = rawText;
   if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
       cleanedRaw = cleanedRaw.replace(/\.$/, '');
   }
   let text = cleanedRaw.toLowerCase();
 
-  // A. MAPEO DE PUNTUACIÓN
+  // A. PUNTUACIÓN
   const PUNCTUATION_MAP = {
     "punto y aparte": ".\n", "punto aparte": ".\n", "nuevo párrafo": "\n\n",
     "punto y seguido": ".", "punto seguido": ".", 
@@ -64,106 +62,104 @@ const processText = (rawText, userJargon = [], previousText = "") => {
     text = text.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // B. DICCIONARIO MÉDICO MASIVO (Extraído de tus PDFs - SIN DUPLICADOS)
+  // B. DICCIONARIO MÉDICO MASIVO (CORRECCIONES DE FRASE Y PALABRA)
   const MEDICAL_CORRECTIONS = {
-    // --- ERRORES FONÉTICOS COMUNES ---
-    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
-    "videos": "vidrio", "vídeos": "vidrio", 
-    "sensacional": "centroacinar", "centro asin arias": "centroacinares", "sinacinales": "centroacinares",
+    // CORRECCIONES DE FRASE (Prioridad Alta)
+    "vi frontal": "bifrontal",
+    "vi frontales": "bifrontales",
+    "vi hemisférica": "bihemisférica",
+    "vi hemisféricas": "bihemisféricas",
+    "vi parietal": "biparietal",
+    "vi temporales": "bitemporales",
+    "entre dos": "en T2",
+    "entre 2": "en T2",
+    "en dedos": "en T2",
+    "en de uno": "en T1",
+    "en de 1": "en T1",
+    "mapa a de ce": "mapa ADC",
+    "mapa d c": "mapa ADC",
+    "a nivel subcortical": "subcortical", // Reducción de redundancia
+    
+    // NEURO & CABEZA/CUELLO
+    "hiper interés": "hiperintensa", // Error común detectado
+    "hiper intenso": "hiperintenso",
+    "hiper intensa": "hiperintensa",
+    "hipo intenso": "hipointenso",
+    "hipo intensa": "hipointensa",
+    "microangiopática": "microangiopatía", // Ajuste gramatical frecuente
+    "micro angiopática": "microangiopatía",
+    "leucoaraiosis": "leucoaraiosis",
+    "gliosis": "gliosis",
+    "isquemia": "isquemia",
+    "infarto": "infarto",
+    "agudo": "agudo",
+    "crónico": "crónico",
+    "ventrículos": "ventrículos",
+    "supratentorial": "supratentorial",
+    "infratentorial": "infratentorial",
+    "silla turca": "silla turca",
+    "cavernoso": "seno cavernoso",
+    "polígono": "polígono de Willis",
+    "sustancia blanca": "sustancia blanca",
+    "sustancia gris": "sustancia gris",
+    "ganglios basales": "ganglios basales",
+    "cuerpo calloso": "cuerpo calloso",
+    "protuberancia": "protuberancia",
+    "bulbo": "bulbo raquídeo",
+    "mesencéfalo": "mesencéfalo",
+    "cisternas": "cisternas",
+    "surcos": "surcos",
+    "cisuras": "cisuras",
+    "parenquima": "parénquima",
+    
+    // SECUENCIAS
+    "flair": "FLAIR", "fler": "FLAIR",
+    "stir": "STIR", "estir": "STIR",
+    "dwi": "DWI", "difusión": "DWI",
+    "adc": "ADC",
+    "gre": "GRE", "eco de gradiente": "eco de gradiente",
+    "t1": "T1", "t 1": "T1", "te uno": "T1",
+    "t2": "T2", "t 2": "T2", "te dos": "T2",
+    "tof": "TOF", "top": "TOF", // Error común
+    "fiesta": "FIESTA", "siesta": "FIESTA",
+    "fatsat": "FATSAT", "fat sat": "FATSAT",
+    "gadolinio": "gadolinio", "contraste": "contraste",
+    "realce": "realce", "captación": "captación",
+
+    // ABDOMEN/TORAX/GENERAL
+    "dólares": "nodulares", "dolares": "nodulares",
+    "videos": "vidrio", "vídeos": "vidrio", "esmerilado": "esmerilado",
+    "sensacional": "centroacinar", "centro asin arias": "centroacinares",
     "inflexión": "infeccioso", "infección": "infeccioso",
     "brote": "brote", "árbol en brote": "árbol en brote",
-    "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
-    "impronta": "impronta", "sugestivo": "sugestivo", "compatible": "compatible",
-    "evidencia": "evidencia", "hallazgo": "hallazgo", "significativo": "significativo",
-
-    // --- NEURO (CEREBRO, CUELLO, ÓRBITAS, PEÑASCOS) ---
-    "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
-    "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
-    "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
-    "línea media": "línea media", "desviación": "desviación", "colapso": "colapso",
-    "silla turca": "silla turca", "hipófisis": "hipófisis", "tallo": "tallo hipofisario",
-    "cavernoso": "seno cavernoso", "polígono": "polígono de Willis", "sifones": "sifones carotídeos",
-    "sustancia blanca": "sustancia blanca", "sustancia gris": "sustancia gris", "periventricular": "periventricular",
-    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "núcleo lenticular": "núcleo lenticular",
-    "cerebelo": "cerebelo", "tronco": "tronco del encéfalo", "coronas radiatas": "coronas radiatas",
-    "mesencéfalo": "mesencéfalo", "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
-    "gliosis": "gliosis", "isquemia": "isquemia", "infarto": "infarto", "agudo": "agudo", "crónico": "crónico",
-    "microangiopatía": "microangiopatía", "leucoaraiosis": "leucoaraiosis", "desmielinizante": "desmielinizante",
-    "cavum": "cavum", "meckel": "Meckel", "trigémino": "trigémino", "gasser": "Gasser",
-    "cai": "CAI", "conducto auditivo": "conducto auditivo", "laberinto": "laberinto", "membranoso": "membranoso",
-    "macizo": "macizo cráneo-facial", "ostiomeatales": "ostiomeatales", "infundibulares": "infundibulares",
-    "septum": "septum nasal", "cornetes": "cornetes", "polipoide": "polipoide", "ocupación": "ocupación",
-    "periamigdalino": "periamigdalino", "ganglionar": "ganglionar", "adenomegalias": "adenomegalias",
-
-    // --- SECUENCIAS RM (PROTOCOLOS) ---
-    "de uno": "T1", "t 1": "T1", "te uno": "T1",
-    "de dos": "T2", "t 2": "T2", "te dos": "T2", "t dos estrella": "T2*",
-    "flair": "FLAIR", "fler": "FLAIR", 
-    "stir": "STIR", "estir": "STIR",
-    "difusión": "DWI", "dwi": "DWI", "adc": "ADC", "mapa a de ce": "mapa ADC",
-    "eco de gradiente": "eco de gradiente", "gre": "GRE", "susceptibilidad": "susceptibilidad magnética",
-    "gadolinio": "gadolinio", "contraste": "contraste", "captación": "captación",
-    "realce": "realce", "homogéneo": "homogéneo", "heterogéneo": "heterogéneo",
-    "fiesta": "FIESTA", "siesta": "FIESTA", "tof": "TOF", "fatsat": "FATSAT", "saturación": "saturación grasa",
-    "spgr": "SPGR", "volumétricas": "volumétricas", "angiorm": "angioRM",
-
-    // --- TÓRAX ---
-    "esmerilado": "esmerilado", "deslustrado": "deslustrado", "vidrio": "vidrio",
-    "neumotórax": "neumotórax", "derrame plural": "derrame pleural", "laminar": "laminar",
-    "costodiafragmático": "costodiafragmático", "mediastínico": "mediastínico", "cardiomediastínica": "cardiomediastínica",
-    "hiliar": "hiliar", "perihiliar": "perihiliar", "precarinal": "precarinal", "subcarinal": "subcarinal",
-    "parénquima": "parénquima", "intersticial": "intersticial", "septos": "septos interlobulillares",
-    "alveolar": "alveolar", "consolidación": "consolidación", "broncograma": "broncograma aéreo",
-    "bronquiectasias": "bronquiectasias", "cilíndricas": "cilíndricas", "quísticas": "quísticas",
-    "subpleural": "subpleural", "apical": "apical", "basal": "basal", "segmento": "segmento",
-    "lóbulo": "lóbulo", "cisura": "cisura", "ácigos": "ácigos", "aorta": "aorta", "calcificaciones": "calcificaciones",
-    "botón aórtico": "botón aórtico", "silueta": "silueta", "ateromatosis": "ateromatosis",
-    "bullas": "bullas", "enfisema": "enfisema", "centrolobulillar": "centrolobulillar", "paraseptal": "paraseptal",
-    "panalización": "panalización", "panal de abejas": "panal de abejas", "empedrado": "empedrado (crazy paving)",
-    "granuloma": "granuloma", "secuelar": "secuelar", "tractos": "tractos fibrosos",
-
-    // --- ABDOMEN Y PELVIS ---
-    "hígado graso": "esteatosis hepática", "esteatosis": "esteatosis", "segmento hepático": "segmento hepático",
-    "litiasis": "litiasis", "colelitiasis": "colelitiasis", "coledocolitiasis": "coledocolitiasis", "lito": "lito",
-    "colédoco": "colédoco", "vía biliar": "vía biliar", "intrahepática": "intrahepática", "extrahepática": "extrahepática",
-    "páncreas": "páncreas", "wirsung": "Wirsung", "uncinado": "proceso uncinado",
-    "retroperitoneo": "retroperitoneo", "peritoneo": "peritoneo", "líquido libre": "líquido libre",
-    "anexos": "anexos", "quiste": "quiste", "bosniak": "Bosniak", "simple": "simple", "complejo": "complejo",
-    "divertículos": "divertículos", "diverticulosis": "diverticulosis", "diverticulitis": "diverticulitis",
-    "apendicitis": "apendicitis", "apéndice": "apéndice", "cecal": "cecal", "fosa ilíaca": "fosa ilíaca",
-    "bazo": "bazo", "esplenomegalia": "esplenomegalia", "accesorio": "bazo accesorio",
-    "riñón": "riñón", "renal": "renal", "cortical": "cortical", "medular": "medular", "seno renal": "seno renal",
-    "pielocalicial": "pielocalicial", "ureter": "uréter", "vejiga": "vejiga", "repleción": "repleción",
-    "próstata": "próstata", "seminales": "vesículas seminales", "agrandada": "agrandada",
-    "útero": "útero", "endometrio": "endometrio", "miometrio": "miometrio", "fosas isquiorrectales": "fosas isquiorrectales",
-    "intususcepción": "intususcepción", "vólvulo": "vólvulo", "distensión": "distensión", "niveles": "niveles hidroaéreos",
-
-    // --- MUSCULOESQUELÉTICO (MSK) ---
-    "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis", "degenerativos": "cambios degenerativos",
-    "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta", "trazo": "trazo",
-    "edema óseo": "edema óseo", "médula ósea": "médula ósea", "contusión": "contusión",
-    "ligamento": "ligamento", "cruzado": "cruzado", "anterior": "anterior", "posterior": "posterior",
-    "menisco": "menisco", "rotura": "rotura", "desgarro": "desgarro", 
-    "manguito": "manguito rotador", "supraespinoso": "supraespinoso", "infraespinoso": "infraespinoso",
-    "bursitis": "bursitis", "sinovitis": "sinovitis", "derrame articular": "derrame articular",
-    "geodas": "geodas", "subcondrales": "subcondrales", "esclerosis": "esclerosis",
-    "platillos": "platillos tibiales", "cóndilo": "cóndilo femoral", "rótula": "rótula", "fémur": "fémur",
-
-    // --- ECOGRAFÍA Y GENERAL ---
-    "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "hiperecoico": "hiperecoico",
-    "anecoico": "anecoico", "isoecoico": "isoecoico", "heteroecoico": "heteroecoico",
-    "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
-    "doppler": "Doppler", "flujo": "flujo", "vascularización": "vascularización",
-    "proceso": "proceso", "neoformativo": "neoformativo", "secundarismo": "secundarismo"
+    "atelectasia": "atelectasia", "a tele taxi as": "atelectasia",
+    "neumotórax": "neumotórax", "derrame": "derrame",
+    "litiasis": "litiasis", "colelitiasis": "colelitiasis",
+    "hígado graso": "esteatosis hepática",
+    "quiste": "quiste", "bosniak": "Bosniak",
+    "divertículos": "divertículos", "diverticulosis": "diverticulosis",
+    "apendicitis": "apendicitis",
+    "bazo": "bazo", "esplenomegalia": "esplenomegalia",
+    "riñón": "riñón", "renal": "renal",
+    "páncreas": "páncreas", "wirsung": "Wirsung",
+    
+    // MSK
+    "fractura": "fractura", "fisura": "fisura",
+    "edema óseo": "edema óseo",
+    "ligamento": "ligamento", "cruzado": "cruzado",
+    "menisco": "menisco", "rotura": "rotura",
+    "artrosis": "artrosis", "osteofitos": "osteofitos"
   };
 
-  Object.keys(MEDICAL_CORRECTIONS).forEach(term => {
-    // Usamos límites de palabra (\b) para evitar reemplazos parciales incorrectos
+  // Aplicar correcciones (primero las frases largas para evitar reemplazos parciales)
+  const sortedTerms = Object.keys(MEDICAL_CORRECTIONS).sort((a, b) => b.length - a.length);
+  
+  sortedTerms.forEach(term => {
     const regex = new RegExp(`\\b${escapeRegExp(term)}\\b`, 'gi');
     text = text.replace(regex, MEDICAL_CORRECTIONS[term]);
   });
 
-  // C. JERGA DE USUARIO (Tus personalizaciones)
+  // C. JERGA DE USUARIO
   if (Array.isArray(userJargon)) {
     userJargon.forEach(item => {
        if(item && item.trigger && item.replacement) {
@@ -174,10 +170,8 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   }
 
   // D. LIMPIEZA FINAL DE ESPACIOS
-  // Quitar espacio antes de puntuación
-  text = text.replace(/\s+([.,;:])/g, '$1');
-  // Asegurar espacio después de puntuación si no hay salto
-  text = text.replace(/([.,;:])(?=[^\s\n])/g, '$1 ');
+  text = text.replace(/\s+([.,;:])/g, '$1'); // Quitar espacio antes
+  text = text.replace(/([.,;:])(?=[^\s\n])/g, '$1 '); // Poner espacio después
 
   // E. MAYÚSCULAS INTELIGENTES
   const trimmedPrev = previousText ? previousText.trim() : "";
@@ -186,7 +180,7 @@ const processText = (rawText, userJargon = [], previousText = "") => {
   if (endsWithPunctuation) {
     return text.charAt(0).toUpperCase() + text.slice(1);
   } else {
-    // Si la palabra corregida es una sigla (todo mayúsculas, ej: TOF), la respetamos
+    // Respetar siglas (T1, FLAIR, ADC, etc.)
     const firstWord = text.split(' ')[0];
     const isAcronym = firstWord.length > 1 && firstWord === firstWord.toUpperCase() && !/\d/.test(firstWord);
     
@@ -230,7 +224,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.continuous = false; // MODO RÁFAGA (Anti-Eco)
+    recognition.continuous = false; // MODO RÁFAGA
     recognition.interimResults = true;
     recognition.lang = 'es-ES';
 
@@ -291,7 +285,7 @@ const MobileMicInterface = ({ sessionId, user }) => {
   );
 };
 
-// --- 5. COMPONENTES UI AUXILIARES (¡AQUÍ ESTABAN FALTANDO!) ---
+// --- 5. COMPONENTES UI AUXILIARES ---
 const SidebarItem = ({ icon: Icon, label, active, onClick }) => (
   <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${active ? 'bg-indigo-50 text-indigo-700 border-r-4 border-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}>
     <Icon size={18} /> {label}
@@ -416,7 +410,7 @@ export default function RadiologyWorkstation() {
         if (e.error === 'not-allowed') {
             pcShouldListenRef.current = false;
             setIsPcListening(false);
-            alert("Permiso denegado.");
+            alert("Permiso denegado. Revisa el candado en la URL.");
         }
     };
 
