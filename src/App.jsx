@@ -22,10 +22,18 @@ const appId = 'neuro-rad-prod';
 
 // --- DICCIONARIOS ---
 const PUNCTUATION_MAP = {
-  "punto y aparte": "\n", "punto aparte": "\n", "nuevo párrafo": "\n\n",
-  "punto y seguido": ".", "punto": ".", "coma": ",", "dos puntos": ":",
-  "punto y coma": ";", "abrir paréntesis": "(", "cerrar paréntesis": ")",
-  "barra": "/", "guión": "-"
+  "punto y aparte": ".\n", // Corregido: Agrega punto antes del salto
+  "punto aparte": ".\n",   // Corregido
+  "nuevo párrafo": "\n\n",
+  "punto y seguido": ".",
+  "punto": ".",
+  "coma": ",",
+  "dos puntos": ":",
+  "punto y coma": ";",
+  "abrir paréntesis": "(",
+  "cerrar paréntesis": ")",
+  "barra": "/",
+  "guión": "-"
 };
 
 const MEDICAL_CORRECTIONS = {
@@ -55,8 +63,7 @@ const MEDICAL_CORRECTIONS = {
 const applyMedicalContext = (text, userJargon = [], previousText = "") => {
   if (!text) return "";
   
-  // 1. LIMPIEZA PREVIA: Eliminar puntos finales automáticos que vienen del motor de voz
-  // Si el texto termina en punto pero NO es la palabra "punto", lo quitamos.
+  // 1. Limpieza inicial: quitar puntos automáticos del final si no son explícitos
   let cleanedRaw = text;
   if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
       cleanedRaw = cleanedRaw.replace(/\.$/, '');
@@ -64,13 +71,14 @@ const applyMedicalContext = (text, userJargon = [], previousText = "") => {
 
   let processed = cleanedRaw.toLowerCase();
 
-  // 2. Aplicar Puntuación EXPLÍCITA (Solo si el usuario dijo la palabra clave)
+  // 2. Aplicar Puntuación (Mapeo)
   Object.keys(PUNCTUATION_MAP).forEach(punct => {
+    // Usamos regex con límites de palabra para no romper palabras que contengan "coma" (ej: comadreja)
     const regex = new RegExp(`\\b${punct}\\b`, 'gi');
     processed = processed.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // 3. Correcciones Médicas
+  // 3. Aplicar Correcciones Médicas
   Object.keys(MEDICAL_CORRECTIONS).forEach(errorTerm => {
     const regex = new RegExp(`\\b${errorTerm}\\b`, 'gi');
     processed = processed.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
@@ -82,15 +90,28 @@ const applyMedicalContext = (text, userJargon = [], previousText = "") => {
      processed = processed.replace(regex, item.replacement);
   });
 
-  // 5. Mayúsculas Inteligentes
+  // 5. LIMPIEZA DE ESPACIOS EN PUNTUACIÓN (NUEVO)
+  // Elimina espacio antes de [.,;:]
+  processed = processed.replace(/\s+([.,;:])/g, '$1');
+  // Asegura espacio después de [.,;:] si le sigue texto (no si es salto de línea)
+  processed = processed.replace(/([.,;:](?!\n))(?=\S)/g, '$1 ');
+
+  // 6. Mayúsculas Inteligentes
   const trimmedPrev = previousText ? previousText.trim() : "";
-  // Solo capitalizamos si lo anterior termina en un signo de puntuación REAL
-  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
+  // Solo capitalizamos si lo anterior termina en un signo de puntuación fuerte
+  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?'].some(char => trimmedPrev.endsWith(char));
 
   if (endsWithPunctuation) {
+    // Capitalizar primera letra
     return processed.charAt(0).toUpperCase() + processed.slice(1);
-  } 
-  return processed;
+  } else {
+    // Si no es inicio de frase, forzamos minúscula (excepto siglas como T1, FLAIR)
+    // Detectamos si es una sigla médica (ej. empieza con mayúscula en el diccionario)
+    const isAcronym = processed.length > 1 && processed.charAt(0) === processed.charAt(0).toUpperCase() && processed.charAt(1) === processed.charAt(1).toUpperCase();
+    if (isAcronym) return processed;
+    
+    return processed; 
+  }
 };
 
 // --- COMPONENTES UI ---
@@ -234,7 +255,7 @@ export default function RadiologyWorkstation() {
   
   // ESTADO PC
   const [isPcListening, setIsPcListening] = useState(false);
-  const [pcError, setPcError] = useState(''); // Para mostrar errores de Chrome
+  const [pcError, setPcError] = useState(''); 
   const pcRecognitionRef = useRef(null);
   const pcShouldListenRef = useRef(false);
   
@@ -272,6 +293,7 @@ export default function RadiologyWorkstation() {
     return () => { unsubCenters(); unsubTemplates(); unsubJargon(); };
   }, [user, isMobileMode]);
 
+  // Listener del Móvil (PC)
   useEffect(() => {
     if (isMobileMode || !remoteSessionCode) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
@@ -283,7 +305,10 @@ export default function RadiologyWorkstation() {
         if (!reportTextRef.current.trim().endsWith(incomingText)) {
              const cleanText = applyMedicalContext(incomingText, jargonDictRef.current, reportTextRef.current);
              setReportText(prev => {
+                // Lógica de espaciado para pegar puntuación
                 const isPunctuation = /^[.,;:]/.test(cleanText);
+                // Si es puntuación, no ponemos espacio antes.
+                // Si no es puntuación y lo anterior no termina en espacio ni salto, ponemos espacio.
                 const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
                 return prev + space + cleanText;
             });
@@ -294,7 +319,7 @@ export default function RadiologyWorkstation() {
     return () => unsub();
   }, [remoteSessionCode, isMobileMode]);
 
-  // --- DICTADO PC (AUTO-RESTART MEJORADO) ---
+  // --- DICTADO PC ---
   const startPcDictation = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return alert("Usa Chrome.");
     
@@ -314,12 +339,10 @@ export default function RadiologyWorkstation() {
     };
     
     recognition.onend = () => {
-        // Si la intención es seguir escuchando, reiniciamos
         if (pcShouldListenRef.current) {
             try { 
                 recognition.start(); 
             } catch(e) { 
-                // Evitamos loop infinito si falla
                 setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200);
             }
         } else {
@@ -334,7 +357,6 @@ export default function RadiologyWorkstation() {
             setIsPcListening(false);
             setPcError('Permiso denegado');
         }
-        // Ignoramos errores transitorios y dejamos que onend reinicie
     };
 
     recognition.onresult = (e) => {
