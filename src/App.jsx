@@ -32,19 +32,18 @@ try {
 
 const appId = 'neuro-rad-prod'; 
 
-// --- 3. DICCIONARIO MAESTRO (Extracción de tus 6 PDFs) ---
+// --- 3. DICCIONARIO MAESTRO (EXTRAÍDO DE TUS 6 PDFs) ---
+// Este objeto se usa SOLO para la carga inicial a la nube.
 const INITIAL_MASTER_DICTIONARY = {
-    // --- ERRORES DE AUDIO CRÍTICOS (Correcciones fonéticas) ---
+    // --- ERRORES DE DICTADO COMUNES ---
     "imperio intensas": "hiperintensas", "imperio": "hiper",
-    "microscopía": "microangiopatía", "microscopia": "microangiopatía",
-    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
-    "videos": "vidrio", "vídeos": "vidrio",
-    "sensacional": "centroacinar", "centro de similares": "centroacinares", "centro similares": "centroacinares",
+    "microscopía": "microangiopatía", "dólares": "nodulares", "dolares": "nodulares",
+    "modulares": "nodulares", "videos": "vidrio", "vídeos": "vidrio",
+    "sensacional": "centroacinar", "centro de similares": "centroacinares",
     "inflexión": "infeccioso", "infección": "infeccioso",
     "brote": "brote", "a tele taxi as": "atelectasias",
-    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica", "vi parietal": "biparietal",
-    "entre 2": "en T2", "entre 1": "en T1", "en de dos": "en T2", "en de uno": "en T1",
-    "como ha compatible": "hallazgo compatible", "cómo ha compatible": "hallazgo compatible",
+    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica",
+    "entre 2": "en T2", "entre 1": "en T1", "como ha compatible": "hallazgo compatible",
     "cifones": "sifones", "cifón": "sifón", "fisc": "FIESTA",
 
     // --- NEURO (Cerebro, Cuello, Peñascos) ---
@@ -175,7 +174,7 @@ const processText = (rawText, globalDictionary = {}, userJargon = [], previousTe
 
   // E. CAPITALIZACIÓN INTELIGENTE
   const trimmedPrev = previousText ? previousText.trim() : "";
-  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?'].some(char => trimmedPrev.endsWith(char));
+  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
 
   if (endsWithPunctuation) {
     return text.charAt(0).toUpperCase() + text.slice(1);
