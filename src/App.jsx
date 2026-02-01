@@ -32,21 +32,22 @@ try {
 
 const appId = 'neuro-rad-prod'; 
 
-// --- 3. DICCIONARIO MAESTRO (SOLO PARA CARGA INICIAL) ---
-// Este objeto contiene todo el vocabulario extraído de tus PDFs.
-// Se usará una sola vez para subirlo a la nube.
+// --- 3. DICCIONARIO MAESTRO (Extracción de tus 6 PDFs) ---
 const INITIAL_MASTER_DICTIONARY = {
-    // ERRORES DE DICTADO
+    // --- ERRORES DE AUDIO CRÍTICOS (Correcciones fonéticas) ---
     "imperio intensas": "hiperintensas", "imperio": "hiper",
-    "microscopía": "microangiopatía", "dólares": "nodulares", "dolares": "nodulares",
-    "modulares": "nodulares", "videos": "vidrio", "vídeos": "vidrio",
-    "sensacional": "centroacinar", "centro de similares": "centroacinares",
+    "microscopía": "microangiopatía", "microscopia": "microangiopatía",
+    "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
+    "videos": "vidrio", "vídeos": "vidrio",
+    "sensacional": "centroacinar", "centro de similares": "centroacinares", "centro similares": "centroacinares",
     "inflexión": "infeccioso", "infección": "infeccioso",
     "brote": "brote", "a tele taxi as": "atelectasias",
-    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica",
-    "entre 2": "en T2", "entre 1": "en T1", "como ha compatible": "hallazgo compatible",
+    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica", "vi parietal": "biparietal",
+    "entre 2": "en T2", "entre 1": "en T1", "en de dos": "en T2", "en de uno": "en T1",
+    "como ha compatible": "hallazgo compatible", "cómo ha compatible": "hallazgo compatible",
+    "cifones": "sifones", "cifón": "sifón", "fisc": "FIESTA",
 
-    // NEURO & CUELLO
+    // --- NEURO (Cerebro, Cuello, Peñascos) ---
     "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
     "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
     "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
@@ -54,7 +55,7 @@ const INITIAL_MASTER_DICTIONARY = {
     "silla turca": "silla turca", "hipófisis": "hipófisis", "tallo": "tallo hipofisario",
     "cavernoso": "seno cavernoso", "polígono": "polígono de Willis", "sifones": "sifones carotídeos",
     "sustancia blanca": "sustancia blanca", "sustancia gris": "sustancia gris", "periventricular": "periventricular",
-    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "lenticular": "núcleo lenticular",
+    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "lenticular": "núcleo lenticular", "caudado": "núcleo caudado",
     "cerebelo": "cerebelo", "tronco": "tronco del encéfalo", "coronas radiatas": "coronas radiatas",
     "centros semiovales": "centros semiovales", "mesencéfalo": "mesencéfalo",
     "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
@@ -67,13 +68,14 @@ const INITIAL_MASTER_DICTIONARY = {
     "periamigdalino": "periamigdalino", "ganglionar": "ganglionar", "adenomegalias": "adenomegalias",
     "neumoencéfalo": "neumoencéfalo", "neumoventrículo": "neumoventrículo", "craneotomía": "craneotomía",
 
-    // SECUENCIAS
+    // --- PROTOCOLOS Y SECUENCIAS ---
     "t1": "T1", "t2": "T2", "t2*": "T2*", "flair": "FLAIR", "stir": "STIR",
     "dwi": "DWI", "adc": "ADC", "gre": "GRE", "gadolinio": "gadolinio",
     "fiesta": "FIESTA", "tof": "TOF", "fatsat": "FATSAT", "spgr": "SPGR",
     "angiorm": "angioRM", "angiotc": "angioTC", "propeller": "PROPELLER",
+    "dos de": "2D", "tres de": "3D", "volumétricas": "volumétricas",
 
-    // TÓRAX
+    // --- TÓRAX ---
     "esmerilado": "esmerilado", "deslustrado": "deslustrado", "neumotórax": "neumotórax",
     "derrame plural": "derrame pleural", "costodiafragmático": "costodiafragmático",
     "mediastínico": "mediastínico", "hiliar": "hiliar", "perihiliar": "perihiliar",
@@ -84,8 +86,9 @@ const INITIAL_MASTER_DICTIONARY = {
     "paraseptal": "paraseptal", "enfisema": "enfisema", "bullas": "bullas",
     "árbol en brote": "árbol en brote", "micronodulillares": "micronodulillares",
     "granuloma": "granuloma", "tractos": "tractos fibrosos", "empiema": "empiema",
+    "precarinal": "precarinal", "subcarinal": "subcarinal",
 
-    // ABDOMEN
+    // --- ABDOMEN ---
     "esteatosis": "esteatosis hepática", "litiasis": "litiasis", "colelitiasis": "colelitiasis",
     "coledocolitiasis": "coledocolitiasis", "colédoco": "colédoco", "vía biliar": "vía biliar",
     "páncreas": "páncreas", "wirsung": "Wirsung", "uncinado": "proceso uncinado",
@@ -97,9 +100,9 @@ const INITIAL_MASTER_DICTIONARY = {
     "vólvulo": "vólvulo", "meteorismo": "meteorismo", "niveles hidroaéreos": "niveles hidroaéreos",
     "bazo": "bazo", "esplenomegalia": "esplenomegalia", "próstata": "próstata",
     "vesículas seminales": "vesículas seminales", "útero": "útero", "endometrio": "endometrio",
-    "anexos": "anexos", "isquiorrectales": "isquiorrectales",
+    "anexos": "anexos", "isquiorrectales": "isquiorrectales", "repleción": "repleción",
 
-    // MSK
+    // --- MSK ---
     "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis",
     "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta",
     "edema óseo": "edema óseo", "médula ósea": "médula ósea", "ligamento": "ligamento",
@@ -110,7 +113,7 @@ const INITIAL_MASTER_DICTIONARY = {
     "rótula": "rótula", "poplíteo": "poplíteo", "dextroconvexa": "dextroconvexa",
     "supracondílea": "supracondílea", "glenohumeral": "glenohumeral", "acromioclavicular": "acromioclavicular",
 
-    // GENERAL
+    // --- GENERAL ---
     "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "anecoico": "anecoico",
     "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
     "doppler": "Doppler", "vascularización": "vascularización", "neoformativo": "neoformativo",
@@ -172,7 +175,7 @@ const processText = (rawText, globalDictionary = {}, userJargon = [], previousTe
 
   // E. CAPITALIZACIÓN INTELIGENTE
   const trimmedPrev = previousText ? previousText.trim() : "";
-  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
+  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?'].some(char => trimmedPrev.endsWith(char));
 
   if (endsWithPunctuation) {
     return text.charAt(0).toUpperCase() + text.slice(1);
