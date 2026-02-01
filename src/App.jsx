@@ -38,7 +38,6 @@ const PUNCTUATION_MAP = {
 
 // --- DICCIONARIO FONÉTICO RADIOLÓGICO ---
 const MEDICAL_CORRECTIONS = {
-  // --- GENERALES ---
   "dólares": "nodulares", "dolares": "nodulares", "modulares": "nodulares",
   "videos": "vidrio", "vídeos": "vidrio",
   "sensacional": "centroacinar", "centro asin arias": "centroacinares",
@@ -46,8 +45,6 @@ const MEDICAL_CORRECTIONS = {
   "brote": "brote", "árbol en brote": "árbol en brote",
   "a tele taxi as": "atelectasias", "atelectasia": "atelectasia",
   "impronta": "impronta", "sugestivo": "sugestivo", "compatible": "compatible",
-  
-  // --- TÓRAX ---
   "esmerilado": "esmerilado", "deslustrado": "deslustrado",
   "neumotórax": "neumotórax", "derrame plural": "derrame pleural",
   "costodiafragmático": "costodiafragmático", "costo diafragmático": "costodiafragmático",
@@ -59,8 +56,6 @@ const MEDICAL_CORRECTIONS = {
   "lóbulo": "lóbulo", "cisura": "cisura", "ácigos": "ácigos",
   "botón aórtico": "botón aórtico", "silueta": "silueta", "cardiomediastínica": "cardiomediastínica",
   "bullas": "bullas", "enfisema": "enfisema", "panalización": "panalización",
-  
-  // --- ABDOMEN Y PELVIS ---
   "hígado graso": "esteatosis hepática", "esteatosis": "esteatosis",
   "litiasis": "litiasis", "colelitiasis": "colelitiasis", "coledocolitiasis": "coledocolitiasis",
   "colédoco": "colédoco", "vía biliar": "vía biliar",
@@ -74,8 +69,6 @@ const MEDICAL_CORRECTIONS = {
   "pielocalicial": "pielocalicial", "ureter": "uréter", "vejiga": "vejiga",
   "próstata": "próstata", "seminales": "vesículas seminales",
   "útero": "útero", "endometrio": "endometrio", "miometrio": "miometrio",
-  
-  // --- NEURO ---
   "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
   "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
   "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
@@ -88,8 +81,6 @@ const MEDICAL_CORRECTIONS = {
   "mesencéfalo": "mesencéfalo", "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
   "gliosis": "gliosis", "isquemia": "isquemia", "infarto": "infarto", "agudo": "agudo", "crónico": "crónico",
   "microangiopatía": "microangiopatía", "leucoaraiosis": "leucoaraiosis",
-  
-  // --- SECUENCIAS RM ---
   "de uno": "T1", "t 1": "T1", "te uno": "T1",
   "de dos": "T2", "t 2": "T2", "te dos": "T2",
   "flair": "FLAIR", "fler": "FLAIR",
@@ -98,8 +89,6 @@ const MEDICAL_CORRECTIONS = {
   "eco de gradiente": "eco de gradiente", "susceptibilidad": "susceptibilidad magnética",
   "gadolinio": "gadolinio", "contraste": "contraste", "captación": "captación",
   "realce": "realce", "homogéneo": "homogéneo", "heterogéneo": "heterogéneo",
-  
-  // --- MUSCULOESQUELÉTICO ---
   "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis",
   "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta",
   "edema óseo": "edema óseo", "médula ósea": "médula ósea",
@@ -107,8 +96,6 @@ const MEDICAL_CORRECTIONS = {
   "menisco": "menisco", "rotura": "rotura", "desgarro": "desgarro",
   "manguito": "manguito rotador", "supraespinoso": "supraespinoso",
   "bursitis": "bursitis", "sinovitis": "sinovitis", "derrame articular": "derrame articular",
-  
-  // --- ECOGRAFÍA ---
   "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "hiperecoico": "hiperecoico",
   "anecoico": "anecoico", "isoecoico": "isoecoico",
   "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
@@ -118,32 +105,27 @@ const MEDICAL_CORRECTIONS = {
 const applyMedicalContext = (text, userJargon = [], previousText = "") => {
   let processed = text.toLowerCase();
 
-  // 1. Puntuación
   Object.keys(PUNCTUATION_MAP).forEach(punct => {
     const regex = new RegExp(`\\b${punct}\\b`, 'gi');
     processed = processed.replace(regex, PUNCTUATION_MAP[punct]);
   });
 
-  // 2. Correcciones Médicas
   Object.keys(MEDICAL_CORRECTIONS).forEach(errorTerm => {
     const regex = new RegExp(`\\b${errorTerm}\\b`, 'gi');
     processed = processed.replace(regex, MEDICAL_CORRECTIONS[errorTerm]);
   });
 
-  // 3. Jerga del Usuario
   userJargon.forEach(item => {
      const regex = new RegExp(`\\b${item.trigger.toLowerCase()}\\b`, 'gi');
      processed = processed.replace(regex, item.replacement);
   });
 
-  // 4. Mayúsculas Inteligentes
   const trimmedPrev = previousText.trim();
   const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
 
   if (endsWithPunctuation) {
     return processed.charAt(0).toUpperCase() + processed.slice(1);
   } else {
-    // Respetar siglas si ya vienen en mayúscula (ej: T1, FLAIR)
     if (processed.length > 1 && processed.charAt(0) === processed.charAt(0).toUpperCase()) {
         return processed;
     }
@@ -169,14 +151,14 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// --- COMPONENTE MÓVIL (MODO CONTINUO INTELIGENTE) ---
+// --- COMPONENTE MÓVIL ---
 const MobileMicInterface = ({ sessionId, user, isOnline }) => {
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Listo');
   const [localText, setLocalText] = useState(''); 
   const shouldListenRef = useRef(false);
   const recognitionRef = useRef(null);
-  const processedIndexRef = useRef(0); // Para evitar duplicados en modo continuo
+  const processedIndexRef = useRef(0); 
   
   const updateRemoteText = async (text) => {
     if (!text || !user || !text.trim()) return;
@@ -200,25 +182,19 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
-    // CAMBIO: Continuous true para permitir pausas al pensar
     recognitionRef.current.continuous = true; 
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = 'es-ES';
 
     recognitionRef.current.onstart = () => {
         setStatus('Escuchando...');
-        processedIndexRef.current = 0; // Reiniciamos el índice de palabras procesadas al iniciar sesión
+        processedIndexRef.current = 0; 
     };
     
     recognitionRef.current.onend = () => {
-      // Si se detiene (por silencio muy largo o error), intentamos reiniciar si el usuario no pausó
       if (shouldListenRef.current) {
-          try { 
-              recognitionRef.current.start(); 
-          } 
-          catch (e) { 
-              setTimeout(() => { if (shouldListenRef.current) recognitionRef.current.start(); }, 100); 
-          }
+          try { recognitionRef.current.start(); } 
+          catch (e) { setTimeout(() => { if (shouldListenRef.current) recognitionRef.current.start(); }, 100); }
       } else {
           setIsListening(false);
           setStatus('Pausado.');
@@ -226,7 +202,7 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
     };
 
     recognitionRef.current.onerror = (event) => {
-      if (event.error === 'no-speech') return; // Ignorar silencio
+      if (event.error === 'no-speech') return; 
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
           shouldListenRef.current = false;
           setIsListening(false);
@@ -236,21 +212,17 @@ const MobileMicInterface = ({ sessionId, user, isOnline }) => {
 
     recognitionRef.current.onresult = (event) => {
       let interimTranscript = '';
-
-      // TRUCO ANTI-ECO: Solo procesamos los resultados que están DESPUÉS de lo que ya enviamos
-      // Usamos processedIndexRef para llevar la cuenta
       for (let i = processedIndexRef.current; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
           const finalChunk = event.results[i][0].transcript;
           if (finalChunk.trim()) {
               updateRemoteText(finalChunk);
           }
-          processedIndexRef.current = i + 1; // Marcamos hasta aquí como "ya enviado"
+          processedIndexRef.current = i + 1; 
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
-      
       if (interimTranscript) setLocalText(interimTranscript + '...');
     };
   }, [sessionId, user]);
@@ -305,6 +277,7 @@ export default function RadiologyWorkstation() {
   const [isListening, setIsListening] = useState(false);
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteSessionCode, setRemoteSessionCode] = useState('');
+  const [pcInterimText, setPcInterimText] = useState(''); // NUEVO: Estado para ver qué escucha la PC
   
   const [showCenterModal, setShowCenterModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -313,8 +286,11 @@ export default function RadiologyWorkstation() {
   const recognitionRef = useRef(null);
   const textareaRef = useRef(null);
   const reportTextRef = useRef('');
+  const jargonDictRef = useRef([]); // Ref para jerga estable
 
+  // Sincronizar Refs
   useEffect(() => { reportTextRef.current = reportText; }, [reportText]);
+  useEffect(() => { jargonDictRef.current = jargonDict; }, [jargonDict]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -340,7 +316,7 @@ export default function RadiologyWorkstation() {
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
       const data = docSnap.data();
       if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
-        const cleanText = applyMedicalContext(data.latestText, jargonDict, reportTextRef.current);
+        const cleanText = applyMedicalContext(data.latestText, jargonDictRef.current, reportTextRef.current);
         setReportText(prev => {
             if (prev.trim().endsWith(cleanText)) return prev;
             const isPunctuation = /^[.,;:]/.test(cleanText);
@@ -351,7 +327,7 @@ export default function RadiologyWorkstation() {
       }
     });
     return () => unsub();
-  }, [remoteSessionCode, isMobileMode, jargonDict]);
+  }, [remoteSessionCode, isMobileMode]);
 
   // CORRECCIÓN MICRÓFONO PC
   useEffect(() => {
@@ -365,32 +341,40 @@ export default function RadiologyWorkstation() {
       
       recognitionRef.current.onresult = (e) => {
         let finalChunk = '';
+        let interimChunk = ''; // Para mostrar lo que está pensando
+        
         for (let i = e.resultIndex; i < e.results.length; ++i) {
-            if(e.results[i].isFinal) finalChunk += e.results[i][0].transcript;
+            if(e.results[i].isFinal) {
+                finalChunk += e.results[i][0].transcript;
+            } else {
+                interimChunk += e.results[i][0].transcript;
+            }
         }
+        
+        setPcInterimText(interimChunk); // Mostrar borrador en pantalla
+
         if(finalChunk) {
-            const cleanText = applyMedicalContext(finalChunk, jargonDict, reportTextRef.current);
+            const cleanText = applyMedicalContext(finalChunk, jargonDictRef.current, reportTextRef.current);
             setReportText(prev => {
                 const isPunctuation = /^[.,;:]/.test(cleanText);
                 const space = (prev && !prev.endsWith(' ') && !prev.endsWith('\n') && !isPunctuation) ? ' ' : '';
                 return prev + space + cleanText;
             });
+            setPcInterimText(''); // Limpiar borrador al confirmar
         }
       };
       recognitionRef.current.onend = () => setIsListening(false);
     }
-  }, [isMobileMode, jargonDict]); // Añadido jargonDict a deps para actualizar contexto
+  }, [isMobileMode]); // Removido jargonDict de dependencias para evitar reinicios
 
   const toggleDictation = () => {
     if (!recognitionRef.current) return alert("Usa Chrome o Edge.");
     if (isListening) {
         recognitionRef.current.stop();
-        // setIsListening(false) se maneja en onend
     } else { 
         recognitionRef.current.start(); 
         setIsListening(true); 
     }
-    // ELIMINADA LÍNEA PROBLEMÁTICA QUE INVERTÍA EL ESTADO
   };
 
   const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
@@ -449,6 +433,11 @@ export default function RadiologyWorkstation() {
             <div className="flex-1 p-8 bg-slate-50 overflow-y-auto">
               <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 min-h-[600px] flex flex-col relative">
                 <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Comienza a dictar..." className="flex-1 w-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"/>
+                {pcInterimText && (
+                    <div className="absolute bottom-4 left-8 right-24 bg-slate-100 p-2 rounded text-slate-500 text-sm italic truncate border border-slate-200">
+                        Escuchando: {pcInterimText}...
+                    </div>
+                )}
                 <button onClick={toggleDictation} className={`absolute bottom-8 right-8 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-105 ${isListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>{isListening ? <MicOff size={28}/> : <Mic size={28}/>}</button>
               </div>
             </div>
