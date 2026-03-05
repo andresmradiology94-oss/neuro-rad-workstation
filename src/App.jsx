@@ -20,7 +20,7 @@ import {
   Mic, MicOff, Settings, FileText, 
   Save, ChevronDown, ChevronRight,
   Layout, X, Search, Loader2, 
-  Folder, Layers, HardDrive, 
+  Folder, Layers, HardDrive, ListTree, /* <-- AQUÍ ESTÁ LA CORRECCIÓN */
   Clipboard, Trash2, Edit3, Plus, CheckCircle, 
   Smartphone, Building2, QrCode, Languages, 
   RefreshCw, Copy, PlusCircle
