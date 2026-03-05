@@ -1,555 +1,334 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, deleteDoc, doc, setDoc, onSnapshot, updateDoc, writeBatch } from 'firebase/firestore';
-import { Mic, MicOff, Settings, FileText, Building2, Book, Plus, Trash2, Save, Layout, Smartphone, X, Wifi, WifiOff, Loader2, AlertTriangle, Clipboard, Upload, Database, Check } from 'lucide-react';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged, 
+  signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  deleteDoc, 
+  doc, 
+  onSnapshot 
+} from 'firebase/firestore';
+import { 
+  Mic, MicOff, Settings, FileText, 
+  Save, ChevronDown, ChevronRight,
+  Layout, X, Search, Loader2, 
+  UploadCloud, CheckCircle, Folder, 
+  Database, Trash2, Info, ClipboardPaste
+} from 'lucide-react';
 
-// --- 1. CONFIGURACIÓN FIREBASE (RADIO-A06EE) ---
-const firebaseConfig = {
+// --- CONFIGURACIÓN FIREBASE ---
+const fallbackConfig = {
   apiKey: "AIzaSyAteWvkLVgv9rRsMLeK5BXuDKhw8nvppR4",
   authDomain: "radio-a06ee.firebaseapp.com",
   projectId: "radio-a06ee",
   storageBucket: "radio-a06ee.firebasestorage.app",
   messagingSenderId: "287944172765",
-  appId: "1:287944172765:web:dc5cebe49a1cc41c3b2734",
-  measurementId: "G-XDJ6W8VH9K"
+  appId: "1:287944172765:web:dc5cebe49a1cc41c3b2734"
 };
 
-// --- 2. INICIALIZACIÓN SEGURA ---
-let app = null;
-let auth = null;
-let db = null;
-let initError = "";
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'neuro-rad-prod';
+const appId = rawAppId.replace(/\//g, '_').split('_src')[0];
 
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (e) {
-  console.error("Error crítico inicializando Firebase:", e);
-  initError = e.message;
-}
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
-const appId = 'neuro-rad-prod'; 
+const METODOLOGIAS = [
+  { id: 'RM', label: 'Resonancia Magnética', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+  { id: 'TC', label: 'Tomografía Computada', color: 'text-orange-600', bg: 'bg-orange-50' },
+  { id: 'RX', label: 'Radiología Convencional', color: 'text-green-600', bg: 'bg-green-50' },
+  { id: 'US', label: 'Ecografía', color: 'text-blue-600', bg: 'bg-blue-50' },
+  { id: 'PETCT', label: 'PET-TC', color: 'text-purple-600', bg: 'bg-purple-50' }
+];
 
-// --- 3. DICCIONARIO MAESTRO (EXTRAÍDO DE TUS 6 PDFs) ---
-// Este objeto se usa SOLO para la carga inicial a la nube.
-const INITIAL_MASTER_DICTIONARY = {
-    // --- ERRORES DE DICTADO COMUNES ---
-    "imperio intensas": "hiperintensas", "imperio": "hiper",
-    "microscopía": "microangiopatía", "dólares": "nodulares", "dolares": "nodulares",
-    "modulares": "nodulares", "videos": "vidrio", "vídeos": "vidrio",
-    "sensacional": "centroacinar", "centro de similares": "centroacinares",
-    "inflexión": "infeccioso", "infección": "infeccioso",
-    "brote": "brote", "a tele taxi as": "atelectasias",
-    "vi frontal": "bifrontal", "vi hemisférica": "bihemisférica",
-    "entre 2": "en T2", "entre 1": "en T1", "como ha compatible": "hallazgo compatible",
-    "cifones": "sifones", "cifón": "sifón", "fisc": "FIESTA",
+const REGIONES = [
+  { id: 'neuro', label: 'Neuro & Cabeza/Cuello', icon: '🧠' },
+  { id: 'torax', label: 'Tórax', icon: '🫁' },
+  { id: 'abdomen', label: 'Abdomen & Pelvis', icon: '🩸' },
+  { id: 'msk', label: 'Músculo-Esquelético', icon: '🦴' },
+  { id: 'vascular', label: 'Vascular / Angio', icon: '➰' },
+  { id: 'otros', label: 'Otros / PET', icon: '📋' }
+];
 
-    // --- NEURO (Cerebro, Cuello, Peñascos) ---
-    "hiperintenso": "hiperintenso", "hipointenso": "hipointenso", "isointenso": "isointenso",
-    "surcos": "surcos", "cisuras": "cisuras", "circunvoluciones": "circunvoluciones",
-    "ventrículos": "ventrículos", "supratentorial": "supratentorial", "infratentorial": "infratentorial",
-    "línea media": "línea media", "desviación": "desviación", "colapso": "colapso",
-    "silla turca": "silla turca", "hipófisis": "hipófisis", "tallo": "tallo hipofisario",
-    "cavernoso": "seno cavernoso", "polígono": "polígono de Willis", "sifones": "sifones carotídeos",
-    "sustancia blanca": "sustancia blanca", "sustancia gris": "sustancia gris", "periventricular": "periventricular",
-    "ganglios basales": "ganglios basales", "tálamo": "tálamo", "lenticular": "núcleo lenticular", "caudado": "núcleo caudado",
-    "cerebelo": "cerebelo", "tronco": "tronco del encéfalo", "coronas radiatas": "coronas radiatas",
-    "centros semiovales": "centros semiovales", "mesencéfalo": "mesencéfalo",
-    "protuberancia": "protuberancia", "bulbo": "bulbo raquídeo",
-    "gliosis": "gliosis", "isquemia": "isquemia", "infarto": "infarto",
-    "microangiopatía": "microangiopatía", "leucoaraiosis": "leucoaraiosis", "desmielinizante": "desmielinizante",
-    "cavum": "cavum", "meckel": "Meckel", "trigémino": "trigémino", "gasser": "Gasser",
-    "cai": "CAI", "conducto auditivo": "conducto auditivo", "laberinto": "laberinto",
-    "macizo": "macizo cráneo-facial", "ostiomeatales": "ostiomeatales", "infundibulares": "infundibulares",
-    "septum": "septum nasal", "cornetes": "cornetes", "polipoide": "polipoide",
-    "periamigdalino": "periamigdalino", "ganglionar": "ganglionar", "adenomegalias": "adenomegalias",
-    "neumoencéfalo": "neumoencéfalo", "neumoventrículo": "neumoventrículo", "craneotomía": "craneotomía",
-
-    // --- PROTOCOLOS Y SECUENCIAS ---
-    "t1": "T1", "t2": "T2", "t2*": "T2*", "flair": "FLAIR", "stir": "STIR",
-    "dwi": "DWI", "adc": "ADC", "gre": "GRE", "gadolinio": "gadolinio",
-    "fiesta": "FIESTA", "tof": "TOF", "fatsat": "FATSAT", "spgr": "SPGR",
-    "angiorm": "angioRM", "angiotc": "angioTC", "propeller": "PROPELLER",
-    "dos de": "2D", "tres de": "3D", "volumétricas": "volumétricas",
-
-    // --- TÓRAX ---
-    "esmerilado": "esmerilado", "deslustrado": "deslustrado", "neumotórax": "neumotórax",
-    "derrame plural": "derrame pleural", "costodiafragmático": "costodiafragmático",
-    "mediastínico": "mediastínico", "hiliar": "hiliar", "perihiliar": "perihiliar",
-    "parénquima": "parénquima", "intersticial": "intersticial", "alveolar": "alveolar",
-    "consolidación": "consolidación", "broncograma": "broncograma aéreo",
-    "bronquiectasias": "bronquiectasias", "panalización": "panalización",
-    "empedrado": "empedrado (Crazy Paving)", "centrolobulillar": "centrolobulillar",
-    "paraseptal": "paraseptal", "enfisema": "enfisema", "bullas": "bullas",
-    "árbol en brote": "árbol en brote", "micronodulillares": "micronodulillares",
-    "granuloma": "granuloma", "tractos": "tractos fibrosos", "empiema": "empiema",
-    "precarinal": "precarinal", "subcarinal": "subcarinal",
-
-    // --- ABDOMEN ---
-    "esteatosis": "esteatosis hepática", "litiasis": "litiasis", "colelitiasis": "colelitiasis",
-    "coledocolitiasis": "coledocolitiasis", "colédoco": "colédoco", "vía biliar": "vía biliar",
-    "páncreas": "páncreas", "wirsung": "Wirsung", "uncinado": "proceso uncinado",
-    "retroperitoneo": "retroperitoneo", "peritoneo": "peritoneo", "líquido libre": "líquido libre",
-    "bosniak": "Bosniak", "quiste": "quiste", "cortical": "cortical", "medular": "medular",
-    "pielocalicial": "pielocalicial", "ureter": "uréter", "vejiga": "vejiga",
-    "divertículos": "divertículos", "diverticulosis": "diverticulosis", "diverticulitis": "diverticulitis",
-    "apendicitis": "apendicitis", "cecal": "cecal", "intususcepción": "intususcepción",
-    "vólvulo": "vólvulo", "meteorismo": "meteorismo", "niveles hidroaéreos": "niveles hidroaéreos",
-    "bazo": "bazo", "esplenomegalia": "esplenomegalia", "próstata": "próstata",
-    "vesículas seminales": "vesículas seminales", "útero": "útero", "endometrio": "endometrio",
-    "anexos": "anexos", "isquiorrectales": "isquiorrectales", "repleción": "repleción",
-
-    // --- MSK ---
-    "osteofitos": "osteofitos", "espondilosis": "espondilosis", "artrosis": "artrosis",
-    "fractura": "fractura", "fisura": "fisura", "conminuta": "conminuta",
-    "edema óseo": "edema óseo", "médula ósea": "médula ósea", "ligamento": "ligamento",
-    "cruzado": "cruzado", "menisco": "menisco", "rotura": "rotura", "desgarro": "desgarro",
-    "manguito": "manguito rotador", "supraespinoso": "supraespinoso", "bursitis": "bursitis",
-    "sinovitis": "sinovitis", "geodas": "geodas", "subcondrales": "subcondrales",
-    "esclerosis": "esclerosis", "platillos": "platillos tibiales", "cóndilo": "cóndilo femoral",
-    "rótula": "rótula", "poplíteo": "poplíteo", "dextroconvexa": "dextroconvexa",
-    "supracondílea": "supracondílea", "glenohumeral": "glenohumeral", "acromioclavicular": "acromioclavicular",
-
-    // --- GENERAL ---
-    "ecogénico": "ecogénico", "hipoecoico": "hipoecoico", "anecoico": "anecoico",
-    "sombra acústica": "sombra acústica posterior", "refuerzo": "refuerzo acústico posterior",
-    "doppler": "Doppler", "vascularización": "vascularización", "neoformativo": "neoformativo",
-    "secundarismo": "secundarismo", "nodular": "nodular", "espiculados": "espiculados"
-};
-
-// --- 4. PROCESAMIENTO DE TEXTO (Lectura de Nube) ---
-const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const processText = (rawText, globalDictionary = {}, userJargon = [], previousText = "") => {
-  if (!rawText) return "";
-  
-  let cleanedRaw = rawText;
-  // Quitar punto final automático si no es explícito
-  if (cleanedRaw.trim().endsWith('.') && !cleanedRaw.toLowerCase().includes('punto')) {
-      cleanedRaw = cleanedRaw.replace(/\.$/, '');
-  }
-  let text = cleanedRaw.toLowerCase();
-
-  // A. MAPEO DE PUNTUACIÓN
-  const PUNCTUATION_MAP = {
-    "punto y aparte": ".\n", "punto aparte": ".\n", "nuevo párrafo": "\n\n",
-    "punto y seguido": ".", "punto seguido": ".", 
-    "punto": ".", "coma": ",", 
-    "dos puntos": ":", "punto y coma": ";", 
-    "abrir paréntesis": "(", "cerrar paréntesis": ")",
-    "barra": "/", "guión": "-"
-  };
-  
-  Object.keys(PUNCTUATION_MAP).forEach(punct => {
-    const regex = new RegExp(`\\b${escapeRegExp(punct)}\\b`, 'gi');
-    text = text.replace(regex, PUNCTUATION_MAP[punct]);
-  });
-
-  // B. DICCIONARIO GLOBAL (Desde Firebase)
-  // Si ya cargó la base de datos, usamos esa. Si no, usamos un fallback mínimo.
-  const dictionaryToUse = (globalDictionary && Object.keys(globalDictionary).length > 0) 
-      ? globalDictionary 
-      : { "dólares": "nodulares", "videos": "vidrio" }; // Fallback mínimo
-
-  Object.keys(dictionaryToUse).forEach(term => {
-    const regex = new RegExp(`\\b${escapeRegExp(term)}\\b`, 'gi');
-    text = text.replace(regex, dictionaryToUse[term]);
-  });
-
-  // C. JERGA USUARIO (Prioridad Alta)
-  if (Array.isArray(userJargon)) {
-    userJargon.forEach(item => {
-       if(item?.trigger && item?.replacement) {
-          const regex = new RegExp(`\\b${escapeRegExp(item.trigger.toLowerCase())}\\b`, 'gi');
-          text = text.replace(regex, item.replacement);
-       }
-    });
-  }
-
-  // D. LIMPIEZA FINAL DE ESPACIOS
-  text = text.replace(/\s+([.,;:])/g, '$1'); // Quitar espacio antes de puntuación
-  text = text.replace(/([.,;:])(?=[^\s\n])/g, '$1 '); // Asegurar espacio después
-
-  // E. CAPITALIZACIÓN INTELIGENTE
-  const trimmedPrev = previousText ? previousText.trim() : "";
-  const endsWithPunctuation = trimmedPrev.length === 0 || ['.', '\n', '!', '?', ':'].some(char => trimmedPrev.endsWith(char));
-
-  if (endsWithPunctuation) {
-    return text.charAt(0).toUpperCase() + text.slice(1);
-  } else {
-    // Respetar siglas si la palabra resultante es una sigla (ej: TOF)
-    const firstWord = text.split(' ')[0];
-    const isAcronym = firstWord.length > 1 && firstWord === firstWord.toUpperCase() && !/\d/.test(firstWord);
-    
-    if (!isAcronym) {
-        return text.charAt(0).toLowerCase() + text.slice(1);
-    }
-    return text;
-  }
-};
-
-// --- FUNCIÓN DE MERGE ---
-const mergeText = (currentReport, newFragmentRaw, globalDict, userJargon) => {
-    const processedFragment = processText(newFragmentRaw, globalDict, userJargon, currentReport);
-    if (!processedFragment) return currentReport;
-
-    const trimmedReport = currentReport.trimEnd();
-    
-    // Capitalización extra check para el fragmento procesado
-    const endsInStopper = trimmedReport.length === 0 || ['.', '\n', '!', '?'].some(c => trimmedReport.endsWith(c));
-    let finalFragment = processedFragment;
-    
-    if (endsInStopper) {
-        finalFragment = finalFragment.charAt(0).toUpperCase() + finalFragment.slice(1);
-    } else {
-        const isAcronym = finalFragment.length > 1 && finalFragment === finalFragment.toUpperCase();
-        if (!isAcronym) finalFragment = finalFragment.charAt(0).toLowerCase() + finalFragment.slice(1);
-    }
-
-    // Fusión Puntuación (Evitar doble punto)
-    if (trimmedReport.endsWith('.') && finalFragment.startsWith('.')) finalFragment = finalFragment.substring(1);
-    if (trimmedReport.endsWith('.') && finalFragment.startsWith('.\n')) finalFragment = finalFragment.substring(1);
-
-    // Espaciado
-    const isPunctuation = /^[.,;:]/.test(finalFragment);
-    const needsSpace = trimmedReport.length > 0 && !trimmedReport.endsWith('\n') && !isPunctuation;
-
-    return trimmedReport + (needsSpace ? ' ' : '') + finalFragment;
-};
-
-// --- 4. COMPONENTE MÓVIL ---
-const MobileMicInterface = ({ sessionId, user }) => {
-  const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Listo');
-  const [localText, setLocalText] = useState(''); 
-  const recognitionRef = useRef(null);
-  const shouldListenRef = useRef(false);
-
-  const sendText = async (text) => {
-    if (!text || !user || !text.trim()) return;
-    try {
-      const sessionRef = doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', sessionId);
-      await setDoc(sessionRef, { latestText: text.trim(), timestamp: Date.now(), lastActiveUser: user.uid }, { merge: true });
-    } catch (e) { setStatus('Reintentando...'); }
-  };
-
-  const startRecognition = () => {
-    if (!window.webkitSpeechRecognition && !window.SpeechRecognition) { setStatus('Navegador no soportado.'); return; }
-    if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch(e) {} }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false; // Ráfaga para evitar eco
-    recognition.interimResults = true;
-    recognition.lang = 'es-ES';
-
-    recognition.onstart = () => { setStatus('Escuchando...'); setIsListening(true); };
-    recognition.onend = () => {
-      if (shouldListenRef.current) { try { recognition.start(); } catch(e) { setTimeout(() => { if(shouldListenRef.current) startRecognition(); }, 200); } }
-      else { setIsListening(false); setStatus('Pausado.'); }
-    };
-    recognition.onerror = (e) => { if (e.error === 'not-allowed') { shouldListenRef.current = false; setStatus('Permiso denegado.'); setIsListening(false); } };
-    recognition.onresult = (e) => {
-      let final = ''; let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; ++i) { if (e.results[i].isFinal) final += e.results[i][0].transcript; else interim += e.results[i][0].transcript; }
-      setLocalText(interim || "...");
-      if (final.trim()) sendText(final);
-    };
-    recognitionRef.current = recognition;
-    try { recognition.start(); } catch(e) {}
-  };
-
-  const toggleMic = () => {
-    if (shouldListenRef.current) { shouldListenRef.current = false; if (recognitionRef.current) recognitionRef.current.stop(); setIsListening(false); }
-    else { shouldListenRef.current = true; startRecognition(); }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center">
-      <div className="mb-8"><h2 className="text-xl font-bold text-indigo-300 flex items-center justify-center gap-2"><Smartphone/> Modo Remoto</h2><p className="text-xs text-slate-500 font-mono mt-1">Sesión: {sessionId}</p></div>
-      <button onClick={toggleMic} className={`w-32 h-32 rounded-full flex items-center justify-center shadow-2xl transition-all ${isListening ? 'bg-red-500 scale-110 animate-pulse' : 'bg-indigo-600'}`}>{isListening ? <Mic size={48}/> : <MicOff size={48}/>}</button>
-      <div className="mt-8 w-full max-w-md bg-slate-800 p-4 rounded-xl border border-slate-700 min-h-[100px]"><p className="text-xs text-slate-400 mb-2 uppercase font-bold tracking-wider">Monitor</p><p className="text-lg font-medium text-white leading-relaxed">{localText || <span className="text-slate-600 italic">Esperando voz...</span>}</p></div>
-      <p className="mt-6 text-sm text-slate-400 max-w-xs">{status}</p>
-    </div>
-  );
-};
-
-// --- COMPONENTES UI AUXILIARES ---
-const SidebarItem = ({ icon: Icon, label, active, onClick }) => ( <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${active ? 'bg-indigo-50 text-indigo-700 border-r-4 border-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={18} /> {label}</button> );
-const Modal = ({ title, onClose, children }) => ( <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"><div className="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden p-6 relative"><button onClick={onClose} className="absolute top-4 right-4 text-slate-400"><X size={20}/></button><h3 className="font-bold text-lg mb-4">{title}</h3>{children}</div></div> );
-
-// --- 6. APP PRINCIPAL ---
-export default function RadiologyWorkstation() {
+export default function App() {
   const [user, setUser] = useState(null);
-  const [isMobileMode, setIsMobileMode] = useState(false);
-  const [mobileSessionId, setMobileSessionId] = useState('');
   const [activeTab, setActiveTab] = useState('workstation');
-  const [configSection, setConfigSection] = useState('centers');
-  
-  const [centers, setCenters] = useState([]);
+  const [configSection, setConfigSection] = useState('import');
+  const [notification, setNotification] = useState(null);
+  const [expandedNodes, setExpandedNodes] = useState(['RM', 'TC']);
+  const [searchTerm, setSearchTerm] = useState('');
   const [templates, setTemplates] = useState([]);
-  const [jargonDict, setJargonDict] = useState([]);
-  const [globalJargon, setGlobalJargon] = useState({}); // DICCIONARIO CLOUD
-  
-  const [currentCenterId, setCurrentCenterId] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [bulkMeta, setBulkMeta] = useState({ method: 'RM', region: 'neuro', subRegion: '' });
+  const [isProcessingBulk, setIsProcessingBulk] = useState(false);
   const [reportText, setReportText] = useState('');
-  
-  const [isPcListening, setIsPcListening] = useState(false);
-  const pcRecognitionRef = useRef(null);
-  const pcShouldListenRef = useRef(false);
-  const [pcInterimText, setPcInterimText] = useState(''); 
-  
-  const [showRemoteModal, setShowRemoteModal] = useState(false);
-  const [remoteSessionCode, setRemoteSessionCode] = useState('');
-  const [showCenterModal, setShowCenterModal] = useState(false);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [showBulkJargonModal, setShowBulkJargonModal] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [tempData, setTempData] = useState({});
-  
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef(null);
   const textareaRef = useRef(null);
-  const reportTextRef = useRef(''); 
-  const jargonDictRef = useRef([]);
-  const globalJargonRef = useRef({});
 
-  useEffect(() => { reportTextRef.current = reportText; }, [reportText]);
-  useEffect(() => { jargonDictRef.current = jargonDict; }, [jargonDict]);
-  useEffect(() => { globalJargonRef.current = globalJargon; }, [globalJargon]);
+  const showNotification = (message, type = 'success') => {
+      setNotification({ message, type });
+      setTimeout(() => setNotification(null), 4000);
+  };
 
   useEffect(() => {
-    if (initError) return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'mic') { setIsMobileMode(true); setMobileSessionId(params.get('session')); }
-    if (auth) { signInAnonymously(auth).catch(console.error); return onAuthStateChanged(auth, setUser); }
+    const init = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
+        else await signInAnonymously(auth);
+      } catch (err) { console.error("Auth Error:", err); }
+    };
+    init();
+    return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // CARGA DE DATOS (Incluye Diccionario Global)
   useEffect(() => {
-    if (!user || !db || isMobileMode) return;
-    try {
-        const unsubCenters = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), s => {
-          const data = s.docs.map(d => ({id: d.id, ...d.data()}));
-          setCenters(data);
-          if (!currentCenterId && data.length > 0) setCurrentCenterId(data[0].id);
-        });
-        const unsubTemplates = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), s => setTemplates(s.docs.map(d => ({id: d.id, ...d.data()}))));
-        const unsubJargon = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), s => setJargonDict(s.docs.map(d => ({id: d.id, ...d.data()}))));
-        
-        // SUSCRIPCIÓN AL DICCIONARIO GLOBAL
-        const unsubGlobal = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'jargon_global'), s => {
-            const globalData = {};
-            s.docs.forEach(doc => {
-                const data = doc.data();
-                Object.assign(globalData, data.dictionary || {});
-            });
-            setGlobalJargon(globalData);
-        });
-
-        return () => { unsubCenters(); unsubTemplates(); unsubJargon(); unsubGlobal(); };
-    } catch (e) { console.error("Error data:", e); }
-  }, [user, isMobileMode]);
-
-  // Listener Móvil
-  useEffect(() => {
-    if (isMobileMode || !remoteSessionCode || !db) return;
-    const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'remote_mic_sessions', remoteSessionCode), (docSnap) => {
-      const data = docSnap.data();
-      if (data?.latestText && data.latestText.trim() !== '' && data.timestamp > (Date.now() - 5000)) {
-        const rawInput = data.latestText;
-        const currentRep = reportTextRef.current;
-        if (!currentRep.trim().endsWith(rawInput)) {
-             const newText = mergeText(currentRep, rawInput, globalJargonRef.current, jargonDictRef.current);
-             setReportText(newText);
-        }
-        updateDoc(docSnap.ref, { latestText: '' }); 
-      }
+    if (!user || !db) return;
+    return onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), s => {
+        setTemplates(s.docs.map(d => ({id: d.id, ...d.data()})));
     });
-    return () => unsub();
-  }, [remoteSessionCode, isMobileMode]);
+  }, [user]);
 
-  // --- DICTADO PC ---
-  const startPcDictation = () => {
-    if (!window.webkitSpeechRecognition && !window.SpeechRecognition) return alert("Usa Chrome.");
-    if (pcRecognitionRef.current) { try { pcRecognitionRef.current.abort(); } catch(e) {} }
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'es-ES';
-    recognition.onstart = () => setIsPcListening(true);
-    recognition.onend = () => {
-        if (pcShouldListenRef.current) { try { recognition.start(); } catch(e) { setTimeout(() => { if(pcShouldListenRef.current) startPcDictation(); }, 200); } }
-        else { setIsPcListening(false); }
-    };
-    recognition.onerror = (e) => { if (e.error === 'not-allowed') { pcShouldListenRef.current = false; setIsPcListening(false); alert("Permiso denegado."); } };
-    recognition.onresult = (e) => {
-        let final = ''; let interim = '';
-        for (let i = e.resultIndex; i < e.results.length; ++i) { if(e.results[i].isFinal) final += e.results[i][0].transcript; else interim += e.results[i][0].transcript; }
-        setPcInterimText(interim);
-        if(final) {
-            const newText = mergeText(reportTextRef.current, final, globalJargonRef.current, jargonDictRef.current);
-            setReportText(newText);
-            setPcInterimText(''); 
-        }
-    };
-    pcRecognitionRef.current = recognition;
-    recognition.start();
-  };
-
-  const togglePcDictation = () => {
-    if (pcShouldListenRef.current) { pcShouldListenRef.current = false; if (pcRecognitionRef.current) pcRecognitionRef.current.stop(); setIsPcListening(false); }
-    else { pcShouldListenRef.current = true; startPcDictation(); }
-  };
-
-  // --- SCRIPT DE CARGA MASIVA (ADMIN) ---
-  const uploadMasterDictionary = async () => {
-      if (!db || !user) return;
-      if (!confirm("¿Estás seguro? Esto subirá +1000 términos a la base de datos pública.")) return;
-      setUploadProgress(10);
-      
-      const batchSize = 400; 
-      const entries = Object.entries(INITIAL_MASTER_DICTIONARY);
-      const totalChunks = Math.ceil(entries.length / batchSize);
-      
+  const handleBulkImport = async () => {
+      if (!bulkText.trim() || !user) return;
+      setIsProcessingBulk(true);
       try {
-          for (let i = 0; i < totalChunks; i++) {
-              const chunk = entries.slice(i * batchSize, (i + 1) * batchSize);
-              const chunkObj = Object.fromEntries(chunk);
-              const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jargon_global', `chunk_${i}`);
-              await setDoc(docRef, { dictionary: chunkObj, version: 1, updated: Date.now() });
-              setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
+          const blocks = bulkText.split('---').filter(b => b.trim().length > 5);
+          const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'templates');
+          
+          for (let block of blocks) {
+              let title = "Plantilla Nueva";
+              let content = block.trim();
+              const titleMatch = block.match(/\[(.*?)\]/);
+              if (titleMatch) {
+                  title = titleMatch[1];
+                  content = block.replace(titleMatch[0], '').trim();
+              } else {
+                  const lines = block.trim().split('\n');
+                  title = lines[0].substring(0, 50);
+                  content = block.trim();
+              }
+              await addDoc(colRef, { ...bulkMeta, title, content, createdAt: Date.now() });
           }
-          alert("¡Base de datos maestra actualizada con éxito!");
-          setUploadProgress(0);
+          showNotification(`¡${blocks.length} plantillas añadidas!`);
+          setBulkText('');
       } catch (e) {
-          console.error(e);
-          alert("Error subiendo datos: " + e.message);
-          setUploadProgress(0);
-      }
+          showNotification("Error: " + e.message, "error");
+      } finally { setIsProcessingBulk(false); }
   };
 
-  const startRemoteSession = () => { setRemoteSessionCode(Math.floor(1000 + Math.random() * 9000).toString()); setShowRemoteModal(true); };
-  const addCenter = async () => { if(tempData.name && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'centers'), {name: tempData.name}); setTempData({}); setShowCenterModal(false); }};
-  const addTemplate = async () => { if(tempData.title && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'templates'), {title: tempData.title, content: tempData.content, centerId: tempData.centerId || 'global'}); setTempData({}); setShowTemplateModal(false); }};
-  const addJargon = async () => { if(tempData.trigger && db && user) { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), {trigger: tempData.trigger.toLowerCase(), replacement: tempData.replacement}); setTempData({}); }};
-  const bulkImportJargon = async () => {
-      if (!tempData.bulkContent || !user || !db) return;
-      const lines = tempData.bulkContent.split('\n');
-      for (const line of lines) {
-          let parts = line.includes(',') ? line.split(',') : line.split('->');
-          if (parts.length >= 2) {
-              const trigger = parts[0].trim().toLowerCase();
-              const replacement = parts[1].trim();
-              if (trigger && replacement) await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'jargon'), { trigger, replacement });
-          }
-      }
-      alert("Importado."); setShowBulkJargonModal(false); setTempData({});
+  const insertTemplate = (content) => {
+      setReportText(prev => prev + (prev.length > 0 ? '\n\n' : '') + content);
+      textareaRef.current?.focus();
   };
-  const deleteItem = async (col, id) => { if(confirm('¿Eliminar?') && db && user) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
-
-  if (initError) return <div className="h-screen flex items-center justify-center bg-red-50 text-red-600 p-8 font-bold text-center"><div><AlertTriangle size={48} className="mx-auto mb-4"/>Error Crítico:<br/>{initError}</div></div>;
-  if (isMobileMode) return <MobileMicInterface sessionId={mobileSessionId} user={user} />;
-
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.href.split('?')[0]}?mode=mic&session=${remoteSessionCode}`)}`;
-  const visibleTemplates = templates.filter(t => t.centerId === 'global' || t.centerId === currentCenterId);
 
   return (
-    <div className="flex h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden">
-      <div className="w-64 bg-white border-r border-slate-200 flex flex-col z-10 shadow-sm hidden md:flex">
-        <div className="p-4 border-b border-slate-100"><h1 className="font-bold text-xl text-indigo-700 flex items-center gap-2"><Layout size={24}/> NeuroRad <span className="text-xs bg-indigo-100 px-2 py-0.5 rounded text-indigo-600">PRO</span></h1></div>
-        <div className="flex-1 py-4 space-y-1">
-            <SidebarItem icon={Mic} label="Estación de Dictado" active={activeTab === 'workstation'} onClick={() => setActiveTab('workstation')} />
-            <SidebarItem icon={Settings} label="Configuración" active={activeTab === 'config'} onClick={() => setActiveTab('config')} />
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
+      {notification && (
+        <div className="fixed top-6 right-6 p-4 rounded-2xl shadow-2xl z-50 text-white font-bold bg-indigo-600 flex items-center gap-3 animate-bounce">
+            <CheckCircle size={20} /> {notification.message}
         </div>
-        {activeTab === 'config' && <div className="border-t border-slate-100 py-4 space-y-1 bg-slate-50"><SidebarItem icon={Building2} label="Mis Centros" active={configSection === 'centers'} onClick={() => setConfigSection('centers')} /><SidebarItem icon={FileText} label="Gestor de Plantillas" active={configSection === 'templates'} onClick={() => setConfigSection('templates')} /><SidebarItem icon={Book} label="Diccionario" active={configSection === 'jargon'} onClick={() => setConfigSection('jargon')} /></div>}
+      )}
+
+      <div className="w-16 lg:w-60 bg-slate-900 text-slate-400 flex flex-col z-20 shadow-2xl">
+        <div className="h-16 flex items-center px-4 border-b border-white/5 bg-slate-950">
+          <Layout size={22} className="text-indigo-400 shrink-0"/>
+          <span className="ml-3 font-black text-white hidden lg:block tracking-tighter text-lg uppercase">NeuroRad <span className="text-indigo-500">PRO</span></span>
+        </div>
+        <div className="flex-1 py-6 space-y-2 px-2">
+            <button onClick={() => setActiveTab('workstation')} className={`w-full flex items-center p-3 rounded-xl ${activeTab === 'workstation' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-white/5 hover:text-white'}`}>
+                <FileText size={20}/><span className="ml-3 hidden lg:block font-bold">Informes</span>
+            </button>
+            <button onClick={() => setActiveTab('config')} className={`w-full flex items-center p-3 rounded-xl ${activeTab === 'config' ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-white/5 hover:text-white'}`}>
+                <Settings size={20}/><span className="ml-3 hidden lg:block font-bold">Ajustes</span>
+            </button>
+        </div>
       </div>
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
         {activeTab === 'workstation' && (
-          <>
-            <div className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-4">
-                 <div className="flex flex-col"><span className="text-xs text-slate-400 font-medium">Ubicación</span>
-                  <select className="font-bold text-slate-800 bg-transparent outline-none cursor-pointer hover:text-indigo-600" value={currentCenterId} onChange={(e) => setCurrentCenterId(e.target.value)}>
-                    <option value="" disabled>-- Selecciona Centro --</option>
-                    {centers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
+          <div className="flex-1 flex h-full">
+            <div className="flex-1 flex flex-col bg-slate-50 relative">
+                <div className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-sm z-10">
+                    <div className="flex items-center gap-2 text-slate-400 font-bold text-xs uppercase tracking-widest">
+                        <Database size={14}/> Estación Activa
+                    </div>
+                    <div className="flex gap-2">
+                        <button onClick={() => setReportText('')} className="px-4 py-2 text-sm font-bold text-slate-400 hover:text-red-500">Limpiar</button>
+                        <button onClick={() => {navigator.clipboard.writeText(reportText); showNotification("Copiado");}} className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-lg flex items-center gap-2 hover:bg-black transition-all active:scale-95"><Save size={16}/> Copiar Informe</button>
+                    </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={startRemoteSession} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm border border-slate-200"><Smartphone size={16} /> Micrófono Remoto</button>
-                <button onClick={() => setReportText('')} className="px-4 py-2 text-sm text-slate-500 hover:text-red-500 hover:bg-red-50 rounded-lg">Limpiar</button>
-                <button onClick={() => {navigator.clipboard.writeText(reportText); alert('Copiado');}} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-medium shadow-sm flex items-center gap-2"><Save size={18}/> Copiar</button>
-              </div>
-            </div>
-            <div className="flex-1 p-8 bg-slate-50 overflow-y-auto">
-              <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 min-h-[600px] flex flex-col relative">
-                <div className="relative flex-1">
-                    <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Comienza a dictar..." className="w-full h-full p-8 outline-none resize-none text-lg text-slate-700 leading-relaxed font-serif"/>
-                    {pcInterimText && (<div className="absolute bottom-4 left-8 right-24 pointer-events-none"><span className="bg-indigo-50 text-indigo-400 px-2 py-1 rounded animate-pulse shadow-sm border border-indigo-100 backdrop-blur-sm">... {pcInterimText}</span></div>)}
+                <div className="flex-1 p-6 lg:p-10 overflow-y-auto">
+                    <div className="max-w-4xl mx-auto h-full min-h-[600px] bg-white rounded-3xl shadow-xl border border-slate-200 flex flex-col relative overflow-hidden">
+                        <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Dicta o elige una plantilla del árbol lateral..." className="flex-1 w-full p-10 outline-none resize-none text-xl text-slate-700 leading-relaxed font-serif"/>
+                        <button onClick={() => isListening ? (recognitionRef.current.stop(), setIsListening(false)) : (recognitionRef.current.start(), setIsListening(true))} className={`absolute bottom-10 right-10 w-20 h-20 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-110 ${isListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>
+                            {isListening ? <MicOff size={32}/> : <Mic size={32}/>}
+                        </button>
+                    </div>
                 </div>
-                <button onClick={togglePcDictation} className={`absolute bottom-8 right-8 w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-105 ${isPcListening ? 'bg-red-500 animate-pulse text-white' : 'bg-indigo-600 text-white'}`}>{isPcListening ? <MicOff size={28}/> : <Mic size={28}/>}</button>
-              </div>
             </div>
-            <div className="w-80 bg-white border-l border-slate-200 flex flex-col hidden lg:flex">
-              <div className="p-4 border-b border-slate-100 bg-slate-50"><h3 className="font-bold text-sm text-slate-700 flex items-center gap-2"><FileText size={16}/> Plantillas</h3></div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {visibleTemplates.map(tpl => (<div key={tpl.id} onClick={() => setReportText(prev => prev + '\n' + tpl.content)} className="p-3 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:shadow-md cursor-pointer group"><span className="font-semibold text-slate-700 text-sm block mb-1">{tpl.title}</span><p className="text-xs text-slate-400 line-clamp-2">{tpl.content}</p></div>))}
-              </div>
-            </div>
-          </>
-        )}
-        {activeTab === 'config' && (
-          <div className="p-8 overflow-y-auto h-full"><div className="max-w-4xl mx-auto">
-               <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-3"><Settings className="text-indigo-600"/> Configuración</h2>
-               <div className="grid grid-cols-2 gap-4 mb-6">
-                 <button onClick={()=>setConfigSection('centers')} className={`p-4 rounded-lg border text-left ${configSection==='centers'?'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500':'bg-white hover:bg-slate-50'}`}><h3 className="font-bold text-slate-700">Centros</h3><p className="text-xs text-slate-500">Gestiona tus lugares de trabajo</p></button>
-                 <button onClick={()=>setConfigSection('templates')} className={`p-4 rounded-lg border text-left ${configSection==='templates'?'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500':'bg-white hover:bg-slate-50'}`}><h3 className="font-bold text-slate-700">Plantillas</h3><p className="text-xs text-slate-500">Macros y textos predefinidos</p></button>
-               </div>
-               
-               {/* SECCIÓN DE CARGA MASIVA */}
-               <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-8 flex items-center justify-between">
-                   <div>
-                       <h3 className="font-bold text-orange-800 flex items-center gap-2"><Database size={18}/> Base de Datos Maestra</h3>
-                       <p className="text-xs text-orange-700 mt-1">Carga inicial del vocabulario médico (+1200 términos).</p>
-                       <p className="text-xs text-orange-600 mt-1 italic">Estado: {Object.keys(globalJargon).length} términos cargados.</p>
-                   </div>
-                   <button onClick={uploadMasterDictionary} disabled={uploadProgress > 0} className="bg-orange-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-700 disabled:opacity-50 transition-colors">
-                       {uploadProgress > 0 ? `Cargando ${uploadProgress}%...` : "Inicializar BD"}
-                   </button>
-               </div>
 
-               {configSection === 'centers' && <div className="space-y-4"><button onClick={() => setShowCenterModal(true)} className="w-full py-3 bg-indigo-50 text-indigo-700 rounded-lg border border-dashed border-indigo-200 flex justify-center gap-2 hover:bg-indigo-100 transition-colors"><Plus size={20}/> Nuevo Centro</button>{centers.map(c => (<div key={c.id} className="bg-white p-4 border rounded flex justify-between items-center shadow-sm"><span>{c.name}</span><button onClick={()=>deleteItem('centers',c.id)} className="text-slate-400 hover:text-red-500"><Trash2 size={18}/></button></div>))}</div>}
+            <div className="w-80 lg:w-96 bg-white border-l border-slate-200 flex flex-col shadow-2xl z-10 overflow-hidden">
+                <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2 text-sm uppercase tracking-tight"><Folder size={18} className="text-indigo-500"/> Explorador PACS</h3>
+                </div>
+                <div className="p-4 border-b border-slate-100">
+                    <div className="relative group">
+                        <Search className="absolute left-3 top-3 text-slate-300" size={16}/>
+                        <input type="text" placeholder="Filtrar estudios..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-slate-100 rounded-2xl text-sm outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"/>
+                    </div>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto bg-white px-2 py-4">
+                    {METODOLOGIAS.map(method => {
+                        const methodTemplates = templates.filter(t => t.method === method.id);
+                        if (methodTemplates.length === 0 && !searchTerm) return null;
+                        const isExpanded = expandedNodes.includes(method.id);
+
+                        return (
+                            <div key={method.id} className="mb-1">
+                                <button onClick={() => setExpandedNodes(prev => prev.includes(method.id) ? prev.filter(n => n !== method.id) : [...prev, method.id])} className={`w-full flex items-center p-3 rounded-xl hover:bg-slate-50 transition-all ${method.color} font-black text-[11px] uppercase tracking-widest`}>
+                                    {isExpanded ? <ChevronDown size={14} className="mr-2"/> : <ChevronRight size={14} className="mr-2"/>}
+                                    <span className={`w-2 h-2 rounded-full mr-2 ${method.bg}`}></span>
+                                    {method.label}
+                                </button>
+
+                                {isExpanded && (
+                                    <div className="mt-1 space-y-1">
+                                        {REGIONES.map(region => {
+                                            const regionTemplates = methodTemplates.filter(t => t.region === region.id);
+                                            if (regionTemplates.length === 0) return null;
+                                            const regId = `${method.id}-${region.id}`;
+                                            const isRegExpanded = expandedNodes.includes(regId);
+
+                                            return (
+                                                <div key={region.id} className="ml-3">
+                                                    <button onClick={() => setExpandedNodes(prev => prev.includes(regId) ? prev.filter(n => n !== regId) : [...prev, regId])} className="w-full flex items-center p-2 rounded-lg hover:bg-slate-50 transition-colors text-slate-700 font-bold text-xs uppercase">
+                                                        {isRegExpanded ? <ChevronDown size={14} className="mr-2 text-slate-300"/> : <ChevronRight size={14} className="mr-2 text-slate-300"/>}
+                                                        {region.icon} <span className="ml-2">{region.label}</span>
+                                                    </button>
+
+                                                    {isRegExpanded && (
+                                                        <div className="ml-6 space-y-2 py-2 pr-2 border-l-2 border-slate-100 pl-3">
+                                                            {Array.from(new Set(regionTemplates.map(t => t.subRegion))).map(sub => {
+                                                                const subs = regionTemplates.filter(t => t.subRegion === sub);
+                                                                return (
+                                                                    <div key={sub || 'Gral'}>
+                                                                        <div className="text-[9px] text-slate-400 font-black uppercase mb-2 flex items-center gap-2">
+                                                                             {sub || 'General'} <div className="h-px flex-1 bg-slate-100"></div>
+                                                                        </div>
+                                                                        <div className="space-y-2">
+                                                                            {subs.map(tpl => (
+                                                                                <button key={tpl.id} onClick={() => insertTemplate(tpl.content)} className="w-full text-left p-3 bg-white border border-slate-200 rounded-xl hover:border-indigo-400 hover:shadow-lg transition-all group active:scale-95">
+                                                                                    <div className="font-bold text-slate-800 text-[13px] group-hover:text-indigo-600">{tpl.title}</div>
+                                                                                </button>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'config' && (
+          <div className="p-8 lg:p-12 overflow-y-auto h-full flex flex-col items-center bg-slate-50">
+            <div className="max-w-4xl w-full">
+               <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3 mb-8"><Settings className="text-indigo-600"/> Gestión de Datos</h2>
                
-               {configSection === 'templates' && <div className="space-y-4">
-                   <div className="flex justify-between">
-                       <button onClick={() => setShowTemplateModal(true)} className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 shadow-sm"><Plus size={18}/> Nueva Plantilla</button>
-                       <button onClick={() => { setTempData({}); setShowTemplateModal(true); }} className="bg-white text-slate-700 border border-slate-300 px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-slate-50"><Clipboard size={18}/> Pegar desde Word</button>
+               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                   <div className="space-y-2">
+                       <button onClick={()=>setConfigSection('import')} className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold text-sm transition-all ${configSection === 'import' ? 'bg-indigo-600 text-white shadow-xl' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200'}`}>
+                           <UploadCloud size={20}/> Importador Inteligente
+                       </button>
+                       <button onClick={()=>setConfigSection('stats')} className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold text-sm transition-all ${configSection === 'stats' ? 'bg-indigo-600 text-white shadow-xl' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200'}`}>
+                           <Database size={20}/> Mi Catálogo
+                       </button>
                    </div>
-                   {templates.map(t => (<div key={t.id} className="bg-white p-4 border rounded flex justify-between items-center shadow-sm"><span className="font-bold text-slate-700">{t.title}</span><button onClick={()=>deleteItem('templates',t.id)} className="text-slate-400 hover:text-red-500"><Trash2 size={18}/></button></div>))}
-                </div>}
-          </div></div>
+
+                   <div className="lg:col-span-2">
+                       {configSection === 'import' && (
+                           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50">
+                               <h3 className="font-black text-xl text-slate-800 mb-2">Importación de Bloques</h3>
+                               <p className="text-sm text-slate-400 mb-6">Copia un bloque del nuevo documento procesado y pégalo aquí.</p>
+                               
+                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                   <div>
+                                       <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Método</label>
+                                       <select value={bulkMeta.method} onChange={e=>setBulkMeta({...bulkMeta, method: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl mt-1 outline-none font-bold text-slate-700">
+                                           {METODOLOGIAS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                       </select>
+                                   </div>
+                                   <div>
+                                       <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Región</label>
+                                       <select value={bulkMeta.region} onChange={e=>setBulkMeta({...bulkMeta, region: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl mt-1 outline-none font-bold text-slate-700">
+                                           {REGIONES.map(r => <option key={r.id} value={r.id}>{r.icon} {r.label}</option>)}
+                                       </select>
+                                   </div>
+                               </div>
+
+                               <div className="mb-6">
+                                   <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Sub-región (Ej: Encéfalo, Columna...)</label>
+                                   <input type="text" value={bulkMeta.subRegion} onChange={e=>setBulkMeta({...bulkMeta, subRegion: e.target.value})} className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl mt-1 outline-none font-bold" placeholder="Nombre de la sub-carpeta..."/>
+                               </div>
+
+                               <textarea 
+                                   value={bulkText} 
+                                   onChange={e=>setBulkText(e.target.value)} 
+                                   placeholder="Pega aquí el texto del archivo PLANTILLAS_PARA_IMPORTAR..." 
+                                   className="w-full p-6 bg-slate-50 border border-slate-100 rounded-3xl h-64 outline-none font-mono text-xs mb-6"
+                               />
+
+                               <button onClick={handleBulkImport} disabled={isProcessingBulk || !bulkText} className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black shadow-xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3 disabled:opacity-50">
+                                   {isProcessingBulk ? <Loader2 className="animate-spin"/> : <ClipboardPaste size={22}/>}
+                                   INYECTAR EN FIREBASE
+                               </button>
+                           </div>
+                       )}
+
+                       {configSection === 'stats' && (
+                           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xl">
+                               <div className="flex justify-between items-center mb-6">
+                                   <h3 className="font-black text-slate-800 uppercase text-xs">Catálogo de Plantillas ({templates.length})</h3>
+                                   <button onClick={()=>{ if(confirm('¿Borrar TODO?')) templates.forEach(t => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'templates', t.id)))}} className="text-[10px] text-red-500 font-bold hover:underline">VACIAR TODO</button>
+                               </div>
+                               <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                                   {templates.map(t => (
+                                       <div key={t.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                           <div className="flex flex-col">
+                                               <span className="text-xs font-bold text-slate-700">{t.title}</span>
+                                               <span className="text-[9px] text-slate-400 font-bold uppercase">{t.method} > {t.subRegion}</span>
+                                           </div>
+                                           <Trash2 size={14} className="text-slate-300 hover:text-red-500 cursor-pointer" onClick={()=>deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'templates', t.id))}/>
+                                       </div>
+                                   ))}
+                               </div>
+                           </div>
+                       )}
+                   </div>
+               </div>
+            </div>
+          </div>
         )}
       </div>
-      
-      {showTemplateModal && <Modal title="Nueva Plantilla" onClose={() => setShowTemplateModal(false)}>
-          <input className="w-full p-3 border rounded mb-3 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Título (ej. Tórax Normal)" onChange={e => setTempData({...tempData, title: e.target.value})}/>
-          <select className="w-full p-3 border rounded mb-3 bg-white focus:ring-2 focus:ring-indigo-500 outline-none" onChange={e => setTempData({...tempData, centerId: e.target.value})} defaultValue=""><option value="" disabled>Centro</option><option value="global">Global</option>{centers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-          <textarea className="w-full p-3 border rounded mb-3 h-48 font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Pega aquí el texto de tu informe o documento Word..." onChange={e => setTempData({...tempData, content: e.target.value})}/>
-          <button onClick={addTemplate} className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700 transition-colors">Guardar Plantilla</button>
-      </Modal>}
-      
-      {showCenterModal && <Modal title="Nuevo Centro" onClose={() => setShowCenterModal(false)}><input className="w-full p-3 border rounded mb-3 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Nombre (ej. Hospital Central)" onChange={e => setTempData({...tempData, name: e.target.value})}/><button onClick={addCenter} className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700 transition-colors">Guardar</button></Modal>}
-      
-      {showBulkJargonModal && <Modal title="Importar Jerga Masiva" onClose={() => setShowBulkJargonModal(false)}>
-          <p className="text-sm text-slate-500 mb-2">Pega tu lista en formato: <strong>Error, Corrección</strong> (una por línea)</p>
-          <textarea className="w-full p-3 border rounded mb-3 h-48 font-mono text-sm" placeholder="dolares, nodulares&#10;videos, vidrio" onChange={e => setTempData({...tempData, bulkContent: e.target.value})}/>
-          <button onClick={bulkImportJargon} className="w-full bg-indigo-600 text-white py-3 rounded font-bold">Procesar Lista</button>
-      </Modal>}
-      
-      {showRemoteModal && <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden text-center relative"><button onClick={() => setShowRemoteModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={24}/></button><div className="bg-indigo-600 p-6 text-white"><h3 className="text-xl font-bold flex items-center justify-center gap-2"><Smartphone/> Micrófono Remoto</h3><p className="text-indigo-100 text-sm mt-1">Conecta tu celular de forma segura</p></div><div className="p-8 flex flex-col items-center"><div className="bg-white p-2 rounded-lg shadow-inner border border-slate-200 mb-6"><img src={qrUrl} alt="Escanear con celular" className="w-48 h-48 object-contain" /></div><div className="space-y-2 text-slate-600"><p className="font-medium">1. Escanea este código</p><p className="text-sm">2. Espera a ver "Listo para dictar"</p></div><div className="mt-6 flex items-center gap-2 text-xs text-slate-400 bg-slate-50 px-3 py-1 rounded-full"><div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>Sesión: {remoteSessionCode}</div></div></div></div>}
     </div>
   );
 }
