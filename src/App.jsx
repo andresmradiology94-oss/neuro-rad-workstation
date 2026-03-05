@@ -14,8 +14,6 @@ import {
   doc, 
   updateDoc,
   onSnapshot,
-  query,
-  orderBy,
   setDoc
 } from 'firebase/firestore';
 import { 
@@ -28,7 +26,7 @@ import {
   RefreshCw, Copy, PlusCircle
 } from 'lucide-react';
 
-// --- CONFIGURACIÓN DE FIREBASE ---
+// --- CONFIGURACIÓN SEGURA DE FIREBASE ---
 const fallbackConfig = {
   apiKey: "AIzaSyAteWvkLVgv9rRsMLeK5BXuDKhw8nvppR4",
   authDomain: "radio-a06ee.firebaseapp.com",
@@ -38,7 +36,15 @@ const fallbackConfig = {
   appId: "1:287944172765:web:dc5cebe49a1cc41c3b2734"
 };
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
+let firebaseConfig = fallbackConfig;
+try {
+  if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+    firebaseConfig = JSON.parse(__firebase_config);
+  }
+} catch (e) {
+  console.error("Error leyendo configuración", e);
+}
+
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'neuro-rad-prod';
 const appId = rawAppId.replace(/\//g, '_').split('_src')[0];
 
@@ -47,19 +53,47 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 // =====================================================================
+// PROTECTOR DE PANTALLA EN BLANCO (Error Boundary)
+// =====================================================================
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-10 bg-red-50 text-red-600 font-mono text-sm h-screen flex flex-col items-center justify-center">
+          <h2 className="text-2xl font-black mb-4 uppercase">Error del Sistema Detectado</h2>
+          <p>La aplicación previno una pantalla en blanco. Detalles del error:</p>
+          <pre className="mt-4 p-4 bg-white rounded-xl shadow border border-red-200">{this.state.error?.toString()}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// =====================================================================
 // MOTOR DE PROCESAMIENTO DE TEXTO (PUNTUACIÓN Y MACROS)
 // =====================================================================
 const processTranscript = (rawText, macrosList) => {
+    if (!rawText) return "";
     let text = rawText.toLowerCase().trim();
     
-    // 1. Eliminar el punto automático de Chrome si NO dijo "punto"
+    // 1. Eliminar punto automático de Chrome si NO dijo "punto"
     if (text.endsWith('.') && !text.endsWith('punto')) {
         text = text.slice(0, -1).trim();
     }
 
     // 2. Aplicar Macros (Jerga Médica) antes de los signos
     if (macrosList && macrosList.length > 0) {
-        const sortedMacros = [...macrosList].sort((a, b) => b.trigger.length - a.trigger.length);
+        // Filtrar vacíos y ordenar para que las frases largas se evalúen primero
+        const validMacros = macrosList.filter(m => m.trigger && m.replacement);
+        const sortedMacros = validMacros.sort((a, b) => b.trigger.length - a.trigger.length);
         sortedMacros.forEach(m => {
             const regex = new RegExp(`\\b${m.trigger.toLowerCase()}\\b`, 'gi');
             text = text.replace(regex, m.replacement);
@@ -93,15 +127,29 @@ const processTranscript = (rawText, macrosList) => {
 // =====================================================================
 function MobileMicView({ sessionId }) {
     const [isListening, setIsListening] = useState(false);
-    const [status, setStatus] = useState("Toca el micro para dictar");
+    const [status, setStatus] = useState("Conectando con la base...");
     const [macros, setMacros] = useState([]);
     const recognitionRef = useRef(null);
 
+    // Es vital autenticar también el celular para que Firebase le permita escribir
     useEffect(() => {
-        // Cargar los macros para que el celular también corrija la jerga
-        const unsubMacros = onSnapshot(collection(db, 'artifacts', appId, 'users', sessionId, 'macros'), s => {
-            setMacros(s.docs.map(d => ({id: d.id, ...d.data()})));
-        });
+        const authMobile = async () => {
+            try {
+                await signInAnonymously(auth);
+                setStatus("Toca el micrófono para dictar");
+            } catch (err) {
+                setStatus("Error de conexión remota");
+            }
+        };
+        authMobile();
+    }, []);
+
+    useEffect(() => {
+        const unsubMacros = onSnapshot(
+            collection(db, 'artifacts', appId, 'users', sessionId, 'macros'), 
+            s => setMacros(s.docs.map(d => ({id: d.id, ...d.data()}))),
+            e => console.error(e)
+        );
         return () => unsubMacros();
     }, [sessionId]);
 
@@ -115,18 +163,19 @@ function MobileMicView({ sessionId }) {
             recognitionRef.current.onstart = () => setStatus("Escuchando hallazgos...");
             recognitionRef.current.onend = () => {
                 setIsListening(false);
-                setStatus("Toca el micro para dictar");
+                setStatus("Toca el micrófono para dictar");
             };
 
             recognitionRef.current.onresult = (e) => {
                 let finalTranscript = '';
-                // Prevención de repeticiones: tomar solo el bloque final actual
+                // Prevención de repeticiones de Google Chrome
                 for (let i = e.resultIndex; i < e.results.length; ++i) {
                     if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' ';
                 }
                 
                 if (finalTranscript.trim()) {
                     const processed = processTranscript(finalTranscript, macros);
+                    // Enviar texto a la PC en tiempo real
                     setDoc(doc(db, 'artifacts', appId, 'users', sessionId, 'remote', 'session'), { 
                         transcript: processed,
                         timestamp: Date.now()
@@ -144,7 +193,7 @@ function MobileMicView({ sessionId }) {
     };
 
     return (
-        <div className="flex flex-col items-center justify-center h-screen bg-slate-950 text-white p-6">
+        <div className="flex flex-col items-center justify-center h-screen w-screen bg-slate-950 text-white p-6 fixed inset-0">
             <div className="mb-16 text-center">
                 <h1 className="text-3xl font-black text-indigo-400 tracking-widest mb-2">NEURORAD <span className="text-white">MIC</span></h1>
                 <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">Enlace Remoto Activo</p>
@@ -152,12 +201,12 @@ function MobileMicView({ sessionId }) {
             
             <button 
                 onClick={toggleMic} 
-                className={`w-48 h-48 rounded-full flex items-center justify-center shadow-2xl transition-all transform active:scale-95 ${isListening ? 'bg-red-500 shadow-red-500/50 animate-pulse' : 'bg-indigo-600 shadow-indigo-600/50'}`}
+                className={`w-56 h-56 rounded-full flex items-center justify-center shadow-2xl transition-all transform active:scale-95 ${isListening ? 'bg-red-500 shadow-red-500/50 animate-pulse' : 'bg-indigo-600 shadow-indigo-600/50'}`}
             >
-                {isListening ? <MicOff size={72} className="text-white"/> : <Mic size={72} className="text-white"/>}
+                {isListening ? <MicOff size={80} className="text-white"/> : <Mic size={80} className="text-white"/>}
             </button>
             
-            <div className="mt-16 text-center font-mono text-sm uppercase tracking-widest text-slate-400">
+            <div className="mt-16 text-center font-mono text-sm uppercase tracking-widest text-slate-400 px-6">
                 {status}
             </div>
         </div>
@@ -198,26 +247,46 @@ function DesktopView() {
       setTimeout(() => setNotification(null), 3000);
   };
 
-  // 1. AUTH
+  // 1. AUTH SEGURO
   useEffect(() => {
     const initAuth = async () => {
-      try { await signInAnonymously(auth); } catch (err) { console.error(err); }
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+            await signInAnonymously(auth);
+        }
+      } catch (err) { console.error("Auth Error", err); }
     };
     initAuth();
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // 2. SINCRONIZACIÓN REAL-TIME
+  // 2. SINCRONIZACIÓN REAL-TIME (Sin orderBy para evitar crash de Firestore)
   useEffect(() => {
     if (!user || !db) return;
     const path = ['artifacts', appId, 'users', user.uid];
 
-    const unsubM = onSnapshot(query(collection(db, ...path, 'methods'), orderBy('name', 'asc')), s => setMethods(s.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubR = onSnapshot(query(collection(db, ...path, 'regions'), orderBy('name', 'asc')), s => setRegions(s.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubT = onSnapshot(collection(db, ...path, 'templates'), s => setTemplates(s.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubMacros = onSnapshot(collection(db, ...path, 'macros'), s => setMacros(s.docs.map(d => ({id: d.id, ...d.data()}))));
+    const unsubM = onSnapshot(collection(db, ...path, 'methods'), s => {
+        const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+        setMethods(data.sort((a,b) => (a.name || '').localeCompare(b.name || '')));
+    }, e => console.error(e));
+
+    const unsubR = onSnapshot(collection(db, ...path, 'regions'), s => {
+        const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+        setRegions(data.sort((a,b) => (a.name || '').localeCompare(b.name || '')));
+    }, e => console.error(e));
+
+    const unsubT = onSnapshot(collection(db, ...path, 'templates'), s => {
+        const data = s.docs.map(d => ({id: d.id, ...d.data()}));
+        setTemplates(data.sort((a,b) => (a.title || '').localeCompare(b.title || '')));
+    }, e => console.error(e));
+
+    const unsubMacros = onSnapshot(collection(db, ...path, 'macros'), s => {
+        setMacros(s.docs.map(d => ({id: d.id, ...d.data()})));
+    }, e => console.error(e));
     
-    // Escuchar Celular
+    // Escuchar texto del celular
     let lastProcessedTime = 0;
     const unsubRemote = onSnapshot(doc(db, ...path, 'remote', 'session'), (d) => {
         if (d.exists() && d.data().transcript) {
@@ -227,12 +296,12 @@ function DesktopView() {
                 lastProcessedTime = data.timestamp;
             }
         }
-    });
+    }, e => console.error(e));
 
     return () => { unsubM(); unsubR(); unsubT(); unsubMacros(); unsubRemote(); };
   }, [user]);
 
-  // 3. TEXTO EN EDITOR
+  // 3. AGREGAR TEXTO AL EDITOR (Control de mayúsculas inteligente)
   const appendProcessedText = (processed) => {
       setReportText(prev => {
           const needsCap = !prev || ['.', '\n'].some(c => prev.trim().endsWith(c));
@@ -267,7 +336,33 @@ function DesktopView() {
     }
   }, [macros]);
 
-  // 5. CRUD (CREAR/BORRAR)
+  // 5. COPIAR Y PEGAR SEGURO
+  const copyToClipboard = async () => {
+    try {
+        await navigator.clipboard.writeText(reportText);
+        showNotification("Copiado al portapapeles");
+    } catch (err) {
+        // Fallback robusto
+        const textArea = document.createElement("textarea");
+        textArea.value = reportText;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try { document.execCommand('copy'); showNotification("Copiado al portapapeles"); } 
+        catch (e) { showNotification("Error al copiar", "error"); }
+        document.body.removeChild(textArea);
+    }
+  };
+
+  const handlePaste = async () => {
+    try {
+        const t = await navigator.clipboard.readText();
+        setEditData({...editData, content: t});
+    } catch (e) {
+        showNotification("Pegue el texto manualmente (Ctrl+V) en el recuadro", "error");
+    }
+  };
+
+  // 6. CRUD (CREAR/BORRAR)
   const saveItem = async () => {
     if (!user) return;
     setIsSaving(true);
@@ -292,6 +387,9 @@ function DesktopView() {
 
   const toggleNode = (id) => setExpandedNodes(prev => prev.includes(id) ? prev.filter(n => n !== id) : [...prev, id]);
 
+  // Generador de URL para QR
+  const qrUrl = window.location.href.split('?')[0] + '?session=' + user?.uid;
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden">
       
@@ -315,13 +413,13 @@ function DesktopView() {
             <SidebarBtn active={activeTab === 'config'} onClick={()=>setActiveTab('config')} icon={<Settings size={18}/>} label="Ajustes de Árbol" />
         </div>
         <div className="p-4 border-t border-white/5 hidden lg:block text-[9px] font-black text-slate-600 uppercase tracking-widest">
-            v3.5 - SISTEMA 2 NIVELES
+            v4.0 - SISTEMA ESTABLE
         </div>
       </div>
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         
-        {/* VISTA 1: ESTACIÓN (DICTADO + ÁRBOL) */}
+        {/* VISTA 1: ESTACIÓN (DICTADO + ÁRBOL 2 NIVELES) */}
         {activeTab === 'workstation' && (
           <div className="flex-1 flex h-full">
             <div className="flex-1 flex flex-col bg-slate-50 relative">
@@ -329,12 +427,12 @@ function DesktopView() {
                     <div className="font-bold text-slate-400 text-[10px] uppercase tracking-widest flex items-center gap-2"><HardDrive size={14}/> Workstation Activa</div>
                     <div className="flex gap-2">
                         <button onClick={() => setReportText('')} className="px-3 py-1.5 text-xs font-bold text-slate-400 hover:text-red-500">Limpiar</button>
-                        <button onClick={() => {navigator.clipboard.writeText(reportText); showNotification("Copiado al portapapeles");}} className="bg-slate-900 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-lg flex items-center gap-2 hover:bg-black transition-all active:scale-95"><Copy size={14}/> Copiar Informe</button>
+                        <button onClick={copyToClipboard} className="bg-slate-900 text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-lg flex items-center gap-2 hover:bg-black transition-all active:scale-95"><Copy size={14}/> Copiar Informe</button>
                     </div>
                 </div>
                 <div className="flex-1 p-6 lg:p-10 overflow-y-auto">
                     <div className="max-w-4xl mx-auto h-full min-h-[600px] bg-white rounded-3xl shadow-xl border border-slate-200 flex flex-col relative overflow-hidden">
-                        <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Dicta hallazgos o selecciona una plantilla del árbol lateral..." className="flex-1 w-full p-10 outline-none resize-none text-xl text-slate-700 leading-relaxed font-serif placeholder:text-slate-200"/>
+                        <textarea ref={textareaRef} value={reportText} onChange={(e) => setReportText(e.target.value)} placeholder="Dicta hallazgos o selecciona una plantilla del explorador..." className="flex-1 w-full p-10 outline-none resize-none text-xl text-slate-700 leading-relaxed font-serif placeholder:text-slate-200"/>
                         <button onClick={() => isListening ? (recognitionRef.current.stop(), setIsListening(false)) : (recognitionRef.current.start(), setIsListening(true))} className={`absolute bottom-10 right-10 w-16 h-16 rounded-full flex items-center justify-center shadow-2xl transition-all transform hover:scale-110 active:scale-95 ${isListening ? 'bg-red-500 animate-pulse text-white shadow-red-500/30' : 'bg-indigo-600 text-white shadow-indigo-600/30'}`}>
                             {isListening ? <MicOff size={28}/> : <Mic size={28}/>}
                         </button>
@@ -342,7 +440,7 @@ function DesktopView() {
                 </div>
             </div>
 
-            {/* EXPLORADOR PACS (2 NIVELES + PLANTILLAS) */}
+            {/* EXPLORADOR PACS (2 NIVELES DIRECTOS) */}
             <div className="w-80 lg:w-96 bg-white border-l border-slate-200 flex flex-col shadow-2xl z-10 overflow-hidden text-xs">
                 <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                     <h3 className="font-black text-slate-800 flex items-center gap-2 uppercase tracking-tight"><Folder size={16} className="text-indigo-500"/> Explorador PACS</h3>
@@ -350,7 +448,7 @@ function DesktopView() {
                 <div className="p-3 border-b border-slate-100">
                     <div className="relative group">
                         <Search className="absolute left-3 top-2.5 text-slate-300" size={14}/>
-                        <input type="text" placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-slate-100 rounded-xl text-xs outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"/>
+                        <input type="text" placeholder="Filtrar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-slate-100 rounded-xl text-xs outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"/>
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto bg-white px-2 py-4 custom-scrollbar">
@@ -386,11 +484,11 @@ function DesktopView() {
                                                             {isRExp ? <ChevronDown size={12} className="mr-2 text-slate-400"/> : <ChevronRight size={12} className="mr-2 text-slate-400"/>}
                                                             {region.name}
                                                         </button>
-                                                        {/* BOTÓN + PARA AÑADIR PLANTILLA EN ESTA CARPETA */}
+                                                        {/* BOTÓN + PARA AÑADIR PLANTILLA (NIVEL 3) */}
                                                         <button 
                                                             onClick={() => { setModalType('template'); setEditData({ methodId: method.id, regionId: region.id }); setIsModalOpen(true); }}
                                                             className="opacity-0 group-hover:opacity-100 p-1 text-indigo-500 hover:text-indigo-700 hover:scale-110 transition-all"
-                                                            title="Añadir nueva plantilla aquí"
+                                                            title="Añadir plantilla aquí"
                                                         >
                                                             <PlusCircle size={16}/>
                                                         </button>
@@ -428,7 +526,7 @@ function DesktopView() {
                 <div className="flex justify-between items-center mb-10">
                     <div>
                         <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3"><Languages className="text-indigo-600"/> Diccionario de Jerga</h2>
-                        <p className="text-sm text-slate-400 mt-1 font-medium">Correcciones fonéticas y acrónimos automáticos.</p>
+                        <p className="text-sm text-slate-400 mt-1 font-medium">Correcciones fonéticas y acrónimos automáticos antes de dictar.</p>
                     </div>
                     <button onClick={()=>{ setModalType('macro'); setEditData({}); setIsModalOpen(true); }} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg flex items-center gap-2 hover:bg-indigo-700 transition-all"><Plus size={18}/> Nuevo Término</button>
                 </div>
@@ -459,11 +557,11 @@ function DesktopView() {
                         <QrCode size={40}/>
                     </div>
                     <h2 className="text-2xl font-black text-slate-800 mb-2 tracking-tight">Voz Inalámbrica</h2>
-                    <p className="text-sm text-slate-400 mb-10 font-medium px-4">Escanea el código con la cámara de tu celular. Tu móvil se convertirá en un micrófono de dictado.</p>
+                    <p className="text-sm text-slate-400 mb-10 font-medium px-4">Escanea el código con tu celular. El navegador móvil se convertirá en un micrófono para dictar a esta PC.</p>
                     
                     <div className="p-8 bg-white rounded-3xl border-2 border-slate-100 shadow-inner mb-10">
                         <img 
-                            src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${window.location.origin}?session=${user?.uid}`} 
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrUrl)}`} 
                             alt="QR Session" 
                             className="w-56 h-56"
                         />
@@ -476,14 +574,14 @@ function DesktopView() {
             </div>
         )}
 
-        {/* VISTA 4: AJUSTES (CREAR MÉTODOS Y REGIONES) */}
+        {/* VISTA 4: AJUSTES (ÁRBOL DE 2 NIVELES) */}
         {activeTab === 'config' && (
           <div className="p-8 lg:p-12 overflow-y-auto h-full bg-slate-50">
             <div className="max-w-6xl mx-auto">
                <div className="flex items-center justify-between mb-10">
                    <div>
                        <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3"><Layers className="text-indigo-600"/> Gestión del Árbol</h2>
-                       <p className="text-sm text-slate-400 font-medium">Crea los Métodos principales y sus Regiones.</p>
+                       <p className="text-sm text-slate-400 font-medium">Crea los Métodos principales y sus Regiones para organizar plantillas.</p>
                    </div>
                </div>
                
@@ -555,7 +653,7 @@ function DesktopView() {
                               <div className="relative">
                                   <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Cuerpo del Informe</label>
                                   <textarea value={editData.content || ''} onChange={e => setEditData({...editData, content: e.target.value})} className="w-full p-6 bg-slate-50 border border-slate-100 rounded-[2.5rem] h-80 outline-none font-mono text-[11px] leading-relaxed shadow-inner" placeholder="Pega aquí tu plantilla desde Word o Google Docs..."/>
-                                  <button onClick={async () => { const t = await navigator.clipboard.readText(); setEditData({...editData, content: t}); }} className="absolute bottom-6 right-6 bg-white p-3 rounded-xl border border-slate-200 text-indigo-500 hover:bg-indigo-50 hover:scale-105 transition-all shadow-sm flex items-center gap-2 font-bold text-[10px]"><Clipboard size={16}/> PEGAR TEXTO</button>
+                                  <button onClick={handlePaste} className="absolute bottom-6 right-6 bg-white p-3 rounded-xl border border-slate-200 text-indigo-500 hover:bg-indigo-50 hover:scale-105 transition-all shadow-sm flex items-center gap-2 font-bold text-[10px]"><Clipboard size={16}/> PEGAR TEXTO</button>
                               </div>
                           </div>
                       )}
@@ -587,17 +685,18 @@ function DesktopView() {
   );
 }
 
-// COMPONENTE ENRUTADOR PRINCIPAL
+// =====================================================================
+// ENRUTADOR PRINCIPAL (Evita el colapso detectando si es PC o Celular)
+// =====================================================================
 export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get('session');
   
-    // El "Router" evita que los hooks de DesktopView se salten, previniendo la pantalla blanca.
-    if (sessionId) {
-        return <MobileMicView sessionId={sessionId} />;
-    }
-  
-    return <DesktopView />;
+    return (
+      <ErrorBoundary>
+        {sessionId ? <MobileMicView sessionId={sessionId} /> : <DesktopView />}
+      </ErrorBoundary>
+    );
 }
 
 const SidebarBtn = ({ active, onClick, icon, label }) => (
